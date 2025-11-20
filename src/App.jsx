@@ -3,7 +3,7 @@ import {
   Send, 
   Settings, 
   Activity, 
-  Database, 
+  Users, // Changed from Database
   Brain, 
   Terminal,
   User,
@@ -119,7 +119,7 @@ const TRANSLATIONS = {
     participantId: "Participant ID",
     enterIdBelow: "Enter your ID to access the lab:",
     formatHint: "Format: 1 Letter + 6 Digits",
-    uploadDataset: "Drag file here (PDF, Word, Excel)",
+    uploadDataset: "Drag file here (Pdf, docx, pptx, xlsx)",
     askQuestion: "Ask a question about Human Capital...",
     readyForAnalysis: "Human Capital Assistant ready",
     analyzingData: "Analyzing data...",
@@ -140,7 +140,7 @@ const TRANSLATIONS = {
     researcherMode: "Researcher Mode",
     locked: "Locked",
     unlocked: "Unlocked",
-    csvExport: "Export CSV",
+    csvExport: "Generate Data View",
     jsonExport: "Raw JSON",
     systemMetrics: "System Metrics",
     analysis: "Analysis",
@@ -154,11 +154,11 @@ const TRANSLATIONS = {
     signOut: "Sign Out"
   },
   de: {
-    enterLab: "Lab betreten",
+    enterLab: "Labor betreten",
     participantId: "Teilnehmer-ID",
     enterIdBelow: "Geben Sie Ihre ID ein:",
     formatHint: "Format: 1 Buchstabe + 6 Ziffern",
-    uploadDataset: "Datei hierher ziehen (PDF, Word, Excel)",
+    uploadDataset: "Datei hierher ziehen (Pdf, docx, pptx, xlsx)",
     askQuestion: "Frage zu Human Capital stellen...",
     readyForAnalysis: "Human Capital Assistent bereit",
     analyzingData: "Daten werden analysiert...",
@@ -179,7 +179,7 @@ const TRANSLATIONS = {
     researcherMode: "Forschermodus",
     locked: "Gesperrt",
     unlocked: "Entsperrt",
-    csvExport: "CSV Export",
+    csvExport: "Datenansicht generieren",
     jsonExport: "Roh-JSON",
     systemMetrics: "Systemmetriken",
     analysis: "Analyse",
@@ -197,7 +197,7 @@ const TRANSLATIONS = {
     participantId: "ID Partecipante",
     enterIdBelow: "Inserisci il tuo ID:",
     formatHint: "Formato: 1 Lettera + 6 Cifre",
-    uploadDataset: "Trascina file qui (PDF, Word, Excel)",
+    uploadDataset: "Trascina file qui (Pdf, docx, pptx, xlsx)",
     askQuestion: "Fai una domanda su Human Capital...",
     readyForAnalysis: "Assistente Human Capital pronto",
     analyzingData: "Analisi in corso...",
@@ -218,7 +218,7 @@ const TRANSLATIONS = {
     researcherMode: "Modalità Ricercatore",
     locked: "Bloccato",
     unlocked: "Sbloccato",
-    csvExport: "Esporta CSV",
+    csvExport: "Genera Vista Dati",
     jsonExport: "JSON Grezzo",
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
@@ -282,12 +282,10 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
     - You help with HR Marketing, Workforce Planning, Employee Retention, and Data Analysis.
     - You calculate metrics and explain HR concepts based on provided data.
     
-    CRITICAL INSTRUCTION - OFF-TOPIC REQUESTS:
-    If the user asks about ANY topic NOT related to Human Resources, Data Analysis, or Workforce Planning (e.g., "write a poem", "history of Rome", "coding a game"), you must REFUSE IMMEDIATELY.
-    
-    Do NOT provide any information about the off-topic subject.
-    Do NOT be chatty.
-    Your ONLY response to off-topic queries must be: "I am designed to assist with Human Capital and HR related questions only."
+    STRICT GUARDRAILS:
+    1. If the user asks about topics unrelated to Human Resources or Data Analysis (e.g., "write a poem", "history of Rome", "coding a game"), politely decline.
+    2. Say: "I am designed to assist with Human Capital and HR related questions only."
+    3. Do NOT mention that you are part of an experiment or study.
 
     Condition Settings:
     ${conditionId === 3 || conditionId === 4 ? "Direct answer only. No reasoning." : "Explain reasoning clearly."}
@@ -331,7 +329,38 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
 };
 
 // -----------------------------------------------------------------------------
-// 4. APP COMPONENT
+// 4. DUMMY LOG GENERATOR (For High Complexity)
+// -----------------------------------------------------------------------------
+const LogTerminal = () => {
+  const [logs, setLogs] = useState(["System initialized..."]);
+  const messages = [
+    "Allocating tensors...", "Quantizing weights...", "Fetching vector embeddings...",
+    "Optimizing context window...", "Verifying token integrity...", "Syncing with db-shard-04...",
+    "Computing gradient descent...", "Normalizing input vectors...", "Cache miss, refetching...",
+    "Garbage collection started...", "Heap memory usage: 45%...", "Latency spike detected..."
+  ];
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setLogs(prev => {
+        const newLog = messages[Math.floor(Math.random() * messages.length)];
+        const updated = [...prev, `[${new Date().toLocaleTimeString()}] ${newLog}`];
+        return updated.slice(-8); // Keep last 8
+      });
+    }, 1500);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="font-mono text-[10px] text-green-400 bg-black/40 p-4 rounded-xl border border-white/10 h-40 overflow-hidden flex flex-col justify-end">
+      {logs.map((l, i) => <div key={i} className="truncate opacity-80">{l}</div>)}
+      <div className="animate-pulse">_</div>
+    </div>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// 5. APP COMPONENT
 // -----------------------------------------------------------------------------
 
 function AppContent() {
@@ -567,7 +596,7 @@ function AppContent() {
           </div>
           <div className="flex border-b border-gray-100">
             {['Summary','Raw Data'].map(rawT => (
-              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600 hover:bg-gray-50/50'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
+              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
             ))}
           </div>
           <div className="p-6">
@@ -587,8 +616,8 @@ function AppContent() {
       <div className="mb-8 max-w-3xl mr-auto flex gap-4 items-start animate-in slide-in-from-bottom-2">
         <div className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-500 flex-shrink-0 shadow-sm"><Brain size={18}/></div>
         <div className="space-y-2 min-w-0 flex-1">
-           <div className="bg-[#F2F2F7] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">{msg.answer}</div>
-           {isHighTransparency && <div className="ml-1 mt-2 p-4 bg-white/70 border border-gray-200/50 rounded-2xl text-xs text-gray-500 shadow-sm backdrop-blur-md"><div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider"><Sparkles size={10}/> {t('reasoning')}<span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">{t('confidence')}: {confidence}%</span></div><div className="leading-relaxed opacity-80">{msg.reasoning_trace}</div></div>}
+           <div className="bg-[#E9E9EB] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">{msg.answer}</div>
+           {isHighTransparency && <div className="ml-1 mt-2 p-4 bg-white/80 border border-gray-200/60 rounded-2xl text-xs text-gray-600 shadow-sm backdrop-blur-md"><div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider"><Sparkles size={10}/> {t('reasoning')}<span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">{t('confidence')}: {confidence}%</span></div><div className="leading-relaxed">{msg.reasoning_trace}</div></div>}
         </div>
       </div>
     );
@@ -610,7 +639,7 @@ function AppContent() {
       <LanguageSwitcher />
       <div className="bg-white/80 backdrop-blur-2xl p-10 rounded-[2.5rem] shadow-2xl w-full max-w-[24rem] border border-white/60 animate-in fade-in zoom-in duration-500">
         <div className="text-center mb-10">
-          <div className="w-16 h-16 bg-gradient-to-br from-gray-900 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl text-white"><Database size={28} strokeWidth={1.5}/></div>
+          <div className="w-16 h-16 bg-gradient-to-br from-gray-900 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-black/10 text-white"><Users size={32} strokeWidth={1.5}/></div>
           <h1 className="text-2xl font-semibold tracking-tight text-gray-900">{t('hcmTitle')}</h1>
           <p className="text-sm text-gray-400 mt-2 font-medium tracking-wide">{t('signInTitle')}</p>
         </div>
@@ -664,7 +693,7 @@ function AppContent() {
         {isHighComplexity && (
           <div className="order-2 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/60 rounded-[2rem] shadow-sm p-8 space-y-8 h-auto lg:h-[calc(100vh-80px)] animate-in slide-in-from-left-4 duration-500">
              <h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> {t('configuration')}</h2>
-             <div className="space-y-6"><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('temperature')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('topP')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div></div>
+             <div className="space-y-6"><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('temperature')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('topP')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div></div>
           </div>
         )}
 
@@ -686,7 +715,7 @@ function AppContent() {
            </div>
 
            <div className="flex-1 overflow-y-auto p-6 pb-6 scroll-smooth">
-              {chatHistory.length===0 && <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards"><div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner"><Bot size={40} strokeWidth={1} className="text-gray-300"/></div><p className="text-sm font-medium text-gray-400 tracking-wide">{t('readyForAnalysis')}</p></div>}
+              {chatHistory.length===0 && <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards"><div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner"><Users size={40} strokeWidth={1} className="text-gray-300"/></div><p className="text-sm font-medium text-gray-400 tracking-wide">{t('readyForAnalysis')}</p></div>}
               {chatHistory.map((m,i) => <MessageRenderer key={i} msg={m}/>)}
               {loading && <div className="flex gap-2 p-4 items-center text-xs text-gray-400 font-medium animate-pulse"><div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-200"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-400"></div> {t('analyzingData')}</div>}
               <div ref={bottomRef}/>
@@ -712,6 +741,8 @@ function AppContent() {
                 <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-sm"><div className="text-gray-500 mb-2 tracking-wider">{t('status')}</div><div className={`text-xs font-bold flex items-center gap-2 ${loading?'text-yellow-400':'text-emerald-400'}`}><span className={`w-2 h-2 rounded-full ${loading?'bg-yellow-400 animate-pulse':'bg-emerald-400'}`}></span>{loading?t('processing'):t('operational')}</div></div>
                 <div className="space-y-3"><div className="flex justify-between text-xs"><span className="tracking-wider">{t('tokenStream')}</span><span className="text-blue-400 font-bold">42/s</span></div><div className="w-full bg-black/40 h-24 rounded-xl border border-white/5 flex items-end p-2 gap-[2px] overflow-hidden">{Array.from({length:24}).map((_,i)=><div key={i} className="flex-1 bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-[1px]" style={{height: `${20+Math.random()*80}%`, opacity: 0.4+Math.random()*0.6}}></div>)}</div></div>
                 <div className="space-y-3 pt-6 border-t border-white/10"><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Zap size={12} className="text-yellow-500"/> {t('latency')}</span><span className="text-white font-mono">24ms</span></div><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Cpu size={12} className="text-purple-500"/> {t('uptime')}</span><span className="text-white font-mono">99.9%</span></div></div>
+                {/* ADDED FAKE TERMINAL LOG */}
+                <LogTerminal />
              </div>
              <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-[80px] pointer-events-none"></div>
              <div className="absolute bottom-0 left-0 w-full h-32 bg-gradient-to-t from-black to-transparent pointer-events-none"></div>
