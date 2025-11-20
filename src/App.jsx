@@ -23,7 +23,10 @@ import {
   Cpu,
   Zap,
   Eye,
-  FileText
+  FileText,
+  AlertCircle,
+  Copy,
+  XCircle
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -40,6 +43,42 @@ import {
   onSnapshot,
   setDoc
 } from "firebase/firestore";
+
+// -----------------------------------------------------------------------------
+// 0. ERROR BOUNDARY
+// -----------------------------------------------------------------------------
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-red-50 flex items-center justify-center p-6">
+          <div className="bg-white p-8 rounded-xl shadow-xl max-w-lg border border-red-200">
+            <h1 className="text-xl font-bold text-red-600 mb-4 flex items-center gap-2">
+              <AlertCircle/> Application Crash
+            </h1>
+            <p className="text-gray-600 mb-4">The application encountered a critical error.</p>
+            <pre className="bg-gray-100 p-4 rounded text-xs font-mono overflow-auto mb-4 text-red-800">
+              {this.state.error ? this.state.error.toString() : "Unknown Error"}
+            </pre>
+            <button onClick={() => window.location.reload()} className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700">
+              Reload Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children; 
+  }
+}
 
 // -----------------------------------------------------------------------------
 // 1. CONFIGURATION & CONSTANTS
@@ -101,7 +140,7 @@ const TRANSLATIONS = {
     researcherMode: "Researcher Mode",
     locked: "Locked",
     unlocked: "Unlocked",
-    csvExport: "Export CSV",
+    csvExport: "Generate Data View",
     jsonExport: "Raw JSON",
     systemMetrics: "System Metrics",
     analysis: "Analysis",
@@ -140,7 +179,7 @@ const TRANSLATIONS = {
     researcherMode: "Forschermodus",
     locked: "Gesperrt",
     unlocked: "Entsperrt",
-    csvExport: "CSV Export",
+    csvExport: "Datenansicht generieren",
     jsonExport: "Roh-JSON",
     systemMetrics: "Systemmetriken",
     analysis: "Analyse",
@@ -179,7 +218,7 @@ const TRANSLATIONS = {
     researcherMode: "Modalità Ricercatore",
     locked: "Bloccato",
     unlocked: "Sbloccato",
-    csvExport: "Esporta CSV",
+    csvExport: "Genera Vista Dati",
     jsonExport: "JSON Grezzo",
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
@@ -205,8 +244,9 @@ const ID_REGEX = /^[adktADKT]\d{6}$/;
 const ALLOWED_EXTENSIONS = ['pdf', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt'];
 
 // -----------------------------------------------------------------------------
-// 2. INITIALIZATION
+// 2. FIREBASE INITIALIZATION
 // -----------------------------------------------------------------------------
+
 let db;
 let auth;
 
@@ -235,7 +275,6 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
   const instruction = `Respond in ${langMap[lang] || "English"}.`;
   
-  // MODIFIED GUARDRAIL: Purely helper focused, no mention of "experiment"
   const systemPrompt = `
     You are a specialized Human Capital Management (HCM) & HR Analytics assistant. ${instruction}
     
@@ -293,7 +332,7 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
 // 4. APP COMPONENT
 // -----------------------------------------------------------------------------
 
-export default function App() {
+function AppContent() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [studentId, setStudentId] = useState("");
   const [loginError, setLoginError] = useState(""); 
@@ -399,23 +438,44 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
+  // --- DATA EXPORT (TEXT DUMP - CRASH PROOF) ---
   const generateDataView = async () => {
     if (!db) return;
     try {
       const colRef = collection(db, "sessions");
       const snapshot = await getDocs(colRef);
-      let csv = "Session_ID,Student_ID,Condition,Date,Start_Unix,Last_Active_Unix,Duration_Mins,Clicks\n";
+      // HEADER WITH READABLE DATES
+      let csv = "Session_ID,Student_ID,Condition,Date,Start_Time,End_Time,Duration_Mins,Clicks\n";
+      
       const rows = snapshot.docs.map(docSnap => {
         const d = docSnap.data();
+        const sessId = docSnap.id;
+        
+        const sId = d.student_id || "Unknown";
+        const cond = d.condition_id || 0;
+        const date = d.date_str || "Unknown";
+        const clicks = d.interaction_count || 0;
+        
         const start = typeof d.start_unix === 'number' ? d.start_unix : 0;
         const end = typeof d.last_active_unix === 'number' ? d.last_active_unix : 0;
+        
         let duration = 0;
-        if (start > 0 && end > start) duration = Math.floor((end - start) / 60000);
-        return `${docSnap.id},${d.student_id||"?"},${d.condition_id||0},${d.date_str||"?"},${start},${end},${duration},${d.interaction_count||0}`;
+        if (start > 0 && end > start) {
+           duration = Math.floor((end - start) / 60000);
+        }
+        
+        // CONVERT TO READABLE ISO STRINGS for CSV
+        const startISO = start > 0 ? new Date(start).toISOString() : "N/A";
+        const endISO = end > 0 ? new Date(end).toISOString() : "N/A";
+        
+        return `${sessId},${sId},${cond},${date},${startISO},${endISO},${duration},${clicks}`;
       });
+      
       csv += rows.join("\n");
       setExportDataText(csv);
-    } catch(e) { setExportDataText("Error: " + e.toString()); }
+    } catch(e) {
+      setExportDataText("Error: " + e.toString());
+    }
   };
 
   const handleLogin = (e) => {
@@ -430,13 +490,9 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    // We do NOT clear the localStorage ID here, so they can re-login easily if they want.
-    // But we reset the state to force the login screen.
-    // If they want to change ID, they can type a new one.
     setIsLoggedIn(false);
     setSessionId(null);
     setChatHistory([]);
-    // Optional: localStorage.removeItem("hcm_student_id"); if you want to force re-entry
   };
 
   const handleSend = async () => {
@@ -477,56 +533,61 @@ export default function App() {
      if(db) await setDoc(doc(db, "settings", "config"), { maintenance_mode: !isMaintenanceMode }, { merge: true });
   };
 
-  // --- UI COMPONENTS ---
+  // --- RENDERERS ---
   const LanguageSwitcher = () => {
-    let label = "", flag = "";
-    if (lang === 'en') { flag = "🇨🇭"; label = "Deutsch"; }
-    else if (lang === 'de') { flag = "🇮🇹"; label = "Italiano"; }
-    else { flag = "🇬🇧"; label = "English"; }
+    const labels = { en: "English", de: "Deutsch", it: "Italiano" };
+    const flags = { en: "🇬🇧", de: "🇨🇭", it: "🇮🇹" };
+    const next = lang === 'en' ? 'de' : lang === 'de' ? 'it' : 'en';
     return (
-      <button onClick={() => setLang(lang === 'en' ? 'de' : lang === 'de' ? 'it' : 'en')} className="fixed top-6 right-6 z-50 bg-white/80 px-4 py-2 rounded-full shadow-md border border-gray-200 text-sm font-medium hover:scale-105 transition-all backdrop-blur-md">
-        <span className="mr-2 text-lg">{flag}</span>{label}
+      <button onClick={() => setLang(next)} className="fixed top-6 right-6 z-50 bg-white/80 px-4 py-2 rounded-full shadow-md border border-gray-200 text-sm font-medium hover:scale-105 transition-all backdrop-blur-md">
+        <span className="mr-2 text-lg">{flags[next]}</span>{labels[next]}
       </button>
     );
   };
 
   const MessageRenderer = ({ msg }) => {
-    if (msg.type === 'user') return (
-      <div className="flex justify-end mb-6 animate-in slide-in-from-bottom-2 duration-500">
-        <div className="bg-[#007AFF] text-white px-5 py-3 rounded-[1.3rem] rounded-tr-none max-w-[85%] shadow-sm leading-relaxed font-normal text-[15px]">
-          {msg.text}
-        </div>
-      </div>
-    );
+    if (msg.type === 'user') return <div className="flex justify-end mb-6"><div className="bg-[#007AFF] text-white px-5 py-3 rounded-[1.3rem] rounded-tr-none max-w-[85%] shadow-md leading-relaxed font-normal text-[15px]">{msg.text}</div></div>;
     
     const confidence = Math.floor((msg.confidence_score || 0.85) * 100);
     
     if (isHighComplexity) {
+      const [tab, setTab] = useState('summary');
       return (
-        <div className="mb-8 bg-white/90 backdrop-blur-xl border border-gray-200 rounded-3xl shadow-sm overflow-hidden animate-in slide-in-from-bottom-4">
+        <div className="mb-8 bg-white/80 backdrop-blur-xl border border-white/20 rounded-3xl shadow-xl overflow-hidden animate-in slide-in-from-bottom-4">
           <div className="bg-gray-50/80 px-5 py-3 border-b border-gray-100 flex justify-between items-center">
             <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-widest">{t('analysis')}</span>
             {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full font-semibold flex gap-1.5 items-center border border-emerald-200/50"><Activity size={12}/> {t('confidence')}: {confidence}%</span>}
           </div>
-          <div className="p-6 space-y-5">
-            <p className="text-gray-800 text-[15px] leading-7">{msg.answer}</p>
-            {isHighTransparency && <div className="pt-5 border-t border-gray-100"><h4 className="text-[11px] font-bold text-gray-400 mb-3 uppercase tracking-wider flex items-center gap-2"><Terminal size={12}/> {t('logicFlow')}</h4><div className="font-mono text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-200/60 leading-relaxed">{msg.reasoning_trace}</div></div>}
+          <div className="flex border-b border-gray-100">
+            {['Summary','Raw Data'].map(rawT => (
+              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600 hover:bg-gray-50/50'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
+            ))}
+          </div>
+          <div className="p-6">
+            {tab==='summary' && (
+              <div className="space-y-4">
+                <p className="text-gray-800 text-sm leading-7 font-normal">{msg.answer}</p>
+                {isHighTransparency && <div className="mt-6 pt-4 border-t border-gray-100"><h4 className="text-[10px] font-bold text-gray-400 mb-3 uppercase tracking-wider flex items-center gap-2"><Terminal size={10}/> {t('logicFlow')}</h4><div className="font-mono text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100 leading-relaxed">{msg.reasoning_trace}</div></div>}
+              </div>
+            )}
+            {tab==='raw' && <pre className="text-xs bg-gray-50 p-4 rounded-xl border border-gray-100 overflow-auto text-gray-600 font-mono">{JSON.stringify(msg.raw_data_snippet,null,2)}</pre>}
           </div>
         </div>
       );
     }
+
     return (
       <div className="mb-8 max-w-3xl mr-auto flex gap-4 items-start animate-in slide-in-from-bottom-2">
-        <div className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-400 flex-shrink-0 shadow-sm"><Brain size={18}/></div>
+        <div className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-500 flex-shrink-0 shadow-sm"><Brain size={18}/></div>
         <div className="space-y-2 min-w-0 flex-1">
            <div className="bg-[#E9E9EB] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">{msg.answer}</div>
-           {isHighTransparency && <div className="ml-1 mt-2 p-4 bg-white/80 border border-gray-200/60 rounded-2xl text-xs text-gray-600 shadow-sm backdrop-blur-md"><div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider"><Sparkles size={12}/> {t('reasoning')}<span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full border border-emerald-100 text-[10px] ml-auto">{t('confidence')}: {confidence}%</span></div><div className="leading-relaxed">{msg.reasoning_trace}</div></div>}
+           {isHighTransparency && <div className="ml-1 mt-2 p-4 bg-white/70 border border-gray-200/50 rounded-2xl text-xs text-gray-500 shadow-sm backdrop-blur-md"><div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider"><Sparkles size={10}/> {t('reasoning')}<span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">{t('confidence')}: {confidence}%</span></div><div className="leading-relaxed opacity-80">{msg.reasoning_trace}</div></div>}
         </div>
       </div>
     );
   };
 
-  if (authError) return <div className="min-h-screen flex items-center justify-center text-red-600 font-bold bg-gray-50">{authError}</div>;
+  if (authError) return <div className="min-h-screen flex items-center justify-center text-red-600 font-bold bg-red-50 p-4 text-center"><div><AlertCircle className="mx-auto mb-2" size={32}/>{authError}<div className="text-sm font-normal text-gray-600 mt-2">Check Firebase Console &gt; Authentication &gt; Sign-in method &gt; Enable Anonymous</div></div></div>;
 
   if (isMaintenanceMode && !isResearcherMode) return (
     <div className="min-h-screen bg-[#F5F5F7] flex flex-col items-center justify-center p-6 text-center font-sans">
@@ -544,7 +605,7 @@ export default function App() {
         <div className="text-center mb-10">
           <div className="w-16 h-16 bg-gradient-to-br from-gray-900 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-black/10 text-white"><Database size={28} strokeWidth={1.5}/></div>
           <h1 className="text-2xl font-semibold tracking-tight text-gray-900">{t('hcmTitle')}</h1>
-          <p className="text-sm text-gray-400 mt-2 font-medium">{t('signInTitle')}</p>
+          <p className="text-sm text-gray-400 mt-2 font-medium tracking-wide">{t('signInTitle')}</p>
         </div>
         <form onSubmit={handleLogin} className="space-y-6">
           <div className="space-y-2">
@@ -556,12 +617,13 @@ export default function App() {
              {loginError ? <div className="flex items-center gap-1.5 text-red-500 text-xs px-2 font-medium animate-in slide-in-from-top-1"><AlertTriangle size={12}/>{loginError}</div> : <div className="text-[10px] text-gray-400 px-4 font-medium tracking-wide uppercase">{t('formatHint')}</div>}
           </div>
           <button type="submit" className="w-full bg-gray-900 hover:bg-black text-white py-3.5 rounded-2xl font-medium text-[15px] flex items-center justify-center gap-2 transition-all transform active:scale-[0.98] shadow-lg shadow-gray-900/10"><span className="mt-0.5">{t('enterLab')}</span><ChevronRight size={16}/></button>
-          <div className="pt-8 border-t border-gray-100">
+          
+          <div className="pt-8 border-t border-gray-100 flex flex-col gap-4">
              <label className="flex items-center justify-center gap-2 text-xs text-gray-400 cursor-pointer hover:text-gray-600 transition-colors"><input type="checkbox" checked={isResearcherMode} onChange={handleResearcherToggle} className="accent-black"/>{t('researcherMode')}</label>
              {isResearcherMode && (
-               <div className="mt-4 grid grid-cols-2 gap-2 animate-in fade-in slide-in-from-top-2">
+               <div className="grid grid-cols-2 gap-2 animate-in fade-in slide-in-from-top-2">
                  <button type="button" onClick={toggleMaintenance} className="text-[10px] py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-200 transition-colors">{isMaintenanceMode?<Lock size={10}/>:<Unlock size={10}/>}{isMaintenanceMode?t('locked'):t('unlocked')}</button>
-                 <button type="button" onClick={generateDataView} className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-blue-100 transition-colors"><FileText size={10}/>{t('generateData')}</button>
+                 <button type="button" onClick={generateDataView} className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-blue-100 transition-colors"><FileText size={10}/>{t('csvExport')}</button>
                </div>
              )}
           </div>
@@ -590,61 +652,67 @@ export default function App() {
       {isResearcherMode && <div className="bg-gray-900 text-white/90 py-2 px-6 text-[10px] font-medium flex justify-between items-center backdrop-blur-md sticky top-0 z-50 shadow-sm tracking-wide"><span className="flex items-center gap-2"><Terminal size={12}/> {CONDITIONS[condition].name} — {studentId}</span><div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${isMaintenanceMode?"bg-red-500 animate-pulse":"bg-emerald-500"}`}></span>{isMaintenanceMode?"MAINTENANCE":"LIVE"}</div></div>}
       
       <div className={`flex-1 ${isHighComplexity ? 'flex flex-col lg:grid lg:grid-cols-12 gap-6 p-6 max-w-[1600px] mx-auto w-full' : 'flex justify-center p-6'} lg:overflow-hidden`}>
-         {isHighComplexity && (
-           <div className="order-2 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/60 rounded-[2rem] shadow-sm p-8 space-y-8 h-auto lg:h-[calc(100vh-80px)] animate-in slide-in-from-left-4 duration-500">
-              <h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> {t('configuration')}</h2>
-              <div className="space-y-6"><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('temperature')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('topP')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div></div>
-           </div>
-         )}
+        
+        {/* SIDEBAR (Config) - High Complexity Only */}
+        {isHighComplexity && (
+          <div className="order-2 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/60 rounded-[2rem] shadow-sm p-8 space-y-8 h-auto lg:h-[calc(100vh-80px)] animate-in slide-in-from-left-4 duration-500">
+             <h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> {t('configuration')}</h2>
+             <div className="space-y-6"><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('temperature')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('topP')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div></div>
+          </div>
+        )}
 
-         <div className={`order-1 lg:order-2 ${isHighComplexity ? 'lg:col-span-6' : 'w-full max-w-4xl'} bg-white rounded-[2.5rem] shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col h-[80vh] lg:h-[calc(100vh-80px)] overflow-hidden relative z-10 animate-in zoom-in-95 duration-500`}>
-            <div className="px-6 py-4 border-b border-gray-50 flex justify-between items-center bg-white/80 backdrop-blur-md z-20 sticky top-0">
-               <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-200"></div><span className="text-xs font-bold tracking-wider uppercase text-gray-500">{t('hcmTitle')}</span></div>
-               <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100"><div className="w-5 h-5 rounded-full bg-gradient-to-br from-gray-700 to-black flex items-center justify-center text-[9px] text-white font-bold shadow-sm">{studentId.charAt(0)}</div><span className="text-xs font-medium text-gray-600 tracking-wide">{studentId}</span></div>
-                  <button onClick={handleLogout} className="text-gray-400 hover:text-red-500 transition-colors"><LogOut size={18}/></button>
-               </div>
-            </div>
-            
-            <div className="p-3">
-              <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} accept=".pdf,.csv,.xlsx,.docx"/>
-              <div onClick={()=>!currentFile && fileInputRef.current.click()} onDragOver={e=>e.preventDefault()} onDrop={handleDrop} className={`mx-4 mt-2 rounded-2xl border border-dashed h-16 flex items-center justify-center gap-3 cursor-pointer transition-all duration-300 group ${currentFile?'bg-blue-50/50 border-blue-200 text-blue-700':'bg-gray-50/50 border-gray-200 text-gray-400 hover:bg-white hover:border-gray-300 hover:shadow-sm'}`}>
-                 {currentFile ? <span className="text-sm font-medium flex items-center gap-2"><File size={16} className="text-blue-500"/> {currentFile.name} <button onClick={e=>{e.stopPropagation();setCurrentFile(null)}} className="p-1 hover:bg-blue-100 rounded-full transition-colors"><X size={14}/></button></span> : <span className="text-xs font-medium flex items-center gap-2 group-hover:scale-105 transition-transform"><Upload size={16}/> {t('uploadDataset')}</span>}
+        {/* MAIN CHAT AREA */}
+        <div className={`order-1 lg:order-2 ${isHighComplexity ? 'lg:col-span-6' : 'w-full max-w-4xl'} bg-white rounded-[2.5rem] shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col h-[80vh] lg:h-[calc(100vh-80px)] overflow-hidden relative z-10 animate-in zoom-in-95 duration-500`}>
+           <div className="px-6 py-4 border-b border-gray-50 flex justify-between items-center bg-white/80 backdrop-blur-md z-20 sticky top-0">
+              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-200"></div><span className="text-xs font-bold tracking-wider uppercase text-gray-500">{t('hcmTitle')}</span></div>
+              <div className="flex items-center gap-4">
+                 <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100"><div className="w-5 h-5 rounded-full bg-gradient-to-br from-gray-700 to-black flex items-center justify-center text-[9px] text-white font-bold shadow-sm">{studentId.charAt(0)}</div><span className="text-xs font-medium text-gray-600 tracking-wide">{studentId}</span></div>
+                 <button onClick={handleLogout} className="text-gray-400 hover:text-red-500 transition-colors"><LogOut size={18}/></button>
               </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 pb-6 scroll-smooth">
-               {chatHistory.length===0 && <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards"><div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner"><Bot size={40} strokeWidth={1} className="text-gray-300"/></div><p className="text-sm font-medium text-gray-400 tracking-wide">{t('readyForAnalysis')}</p></div>}
-               {chatHistory.map((m,i) => <MessageRenderer key={i} msg={m}/>)}
-               {loading && <div className="flex gap-2 p-4 items-center text-xs text-gray-400 font-medium animate-pulse"><div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-200"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-400"></div> {t('analyzingData')}</div>}
-               <div ref={bottomRef}/>
-            </div>
-
-            <div className="p-6 bg-white border-t border-gray-50 z-20">
-               <div className="relative group">
-                 <input type="text" className="w-full pl-6 pr-14 py-4 bg-gray-100 rounded-full text-[15px] focus:bg-white focus:shadow-xl focus:shadow-blue-500/5 outline-none transition-all duration-300 placeholder-gray-400 font-normal" placeholder={t('askQuestion')} value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSend()}/>
-                 <button onClick={handleSend} disabled={loading||!query.trim()} className="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-black text-white rounded-full hover:bg-gray-800 disabled:opacity-50 disabled:hover:bg-black transition-all shadow-md hover:shadow-lg transform active:scale-95"><Send size={16} fill="white"/></button>
-               </div>
-               <div className="text-center mt-4 space-y-2">
-                  <div className="inline-flex items-center justify-center gap-1.5 bg-red-50 px-3 py-1 rounded-full text-[10px] font-medium text-red-600/80"><Lock size={10}/> {t('confidentialDisclaimer')}</div>
-                  <div className="flex items-center justify-center gap-3 text-[10px] text-gray-300 font-medium tracking-wide"><span className="flex items-center gap-1"><Eye size={10}/> {t('auditDisclaimer')}</span><span>•</span><span>{t('aiDisclaimer')}</span></div>
-               </div>
-            </div>
-         </div>
-
-         {isHighComplexity && (
-           <div className="order-3 lg:order-3 lg:col-span-3 bg-[#1c1c1e] text-gray-400 flex flex-col h-auto lg:h-[calc(100vh-80px)] rounded-[2rem] p-8 font-mono text-[10px] shadow-2xl shadow-gray-900/20 overflow-hidden relative animate-in slide-in-from-right-4 duration-500">
-              <div className="font-bold text-white mb-8 flex items-center gap-2 uppercase tracking-widest opacity-90"><Activity size={14} className="text-blue-500"/> {t('systemMetrics')}</div>
-              <div className="space-y-6 relative z-10">
-                 <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-sm"><div className="text-gray-500 mb-2 tracking-wider">{t('status')}</div><div className={`text-xs font-bold flex items-center gap-2 ${loading?'text-yellow-400':'text-emerald-400'}`}><span className={`w-2 h-2 rounded-full ${loading?'bg-yellow-400 animate-pulse':'bg-emerald-400'}`}></span>{loading?t('processing'):t('operational')}</div></div>
-                 <div className="space-y-3"><div className="flex justify-between text-xs"><span className="tracking-wider">{t('tokenStream')}</span><span className="text-blue-400 font-bold">42/s</span></div><div className="w-full bg-black/40 h-24 rounded-xl border border-white/5 flex items-end p-2 gap-[2px] overflow-hidden">{Array.from({length:24}).map((_,i)=><div key={i} className="flex-1 bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-[1px]" style={{height: `${20+Math.random()*80}%`, opacity: 0.4+Math.random()*0.6}}></div>)}</div></div>
-                 <div className="space-y-3 pt-6 border-t border-white/10"><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Zap size={12} className="text-yellow-500"/> {t('latency')}</span><span className="text-white font-mono">24ms</span></div><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Cpu size={12} className="text-purple-500"/> {t('uptime')}</span><span className="text-white font-mono">99.9%</span></div></div>
-              </div>
-              <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-[80px] pointer-events-none"></div>
-              <div className="absolute bottom-0 left-0 w-full h-32 bg-gradient-to-t from-black to-transparent pointer-events-none"></div>
            </div>
-         )}
+           
+           <div className="p-3">
+             <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} accept=".pdf,.csv,.xlsx,.docx"/>
+             <div onClick={()=>!currentFile && fileInputRef.current.click()} onDragOver={e=>e.preventDefault()} onDrop={handleDrop} className={`mx-4 mt-2 rounded-2xl border border-dashed h-16 flex items-center justify-center gap-3 cursor-pointer transition-all duration-300 group ${currentFile?'bg-blue-50/50 border-blue-200 text-blue-700':'bg-gray-50/50 border-gray-200 text-gray-400 hover:bg-white hover:border-gray-300 hover:shadow-sm'}`}>
+                {currentFile ? <span className="text-sm font-medium flex items-center gap-2"><File size={16} className="text-blue-500"/> {currentFile.name} <button onClick={e=>{e.stopPropagation();setCurrentFile(null)}} className="p-1 hover:bg-blue-100 rounded-full transition-colors"><X size={14}/></button></span> : <span className="text-xs font-medium flex items-center gap-2 group-hover:scale-105 transition-transform"><Upload size={16}/> {t('uploadDataset')}</span>}
+             </div>
+           </div>
+
+           <div className="flex-1 overflow-y-auto p-6 pb-6 scroll-smooth">
+              {chatHistory.length===0 && <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards"><div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner"><Bot size={40} strokeWidth={1} className="text-gray-300"/></div><p className="text-sm font-medium text-gray-400 tracking-wide">{t('readyForAnalysis')}</p></div>}
+              {chatHistory.map((m,i) => <MessageRenderer key={i} msg={m}/>)}
+              {loading && <div className="flex gap-2 p-4 items-center text-xs text-gray-400 font-medium animate-pulse"><div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-200"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-400"></div> {t('analyzingData')}</div>}
+              <div ref={bottomRef}/>
+           </div>
+
+           <div className="p-6 bg-white border-t border-gray-50 z-20">
+              <div className="relative group">
+                <input type="text" className="w-full pl-6 pr-14 py-4 bg-gray-100 rounded-full text-[15px] focus:bg-white focus:shadow-xl focus:shadow-blue-500/5 outline-none transition-all duration-300 placeholder-gray-400 font-normal" placeholder={t('askQuestion')} value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSend()}/>
+                <button onClick={handleSend} disabled={loading||!query.trim()} className="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-black text-white rounded-full hover:scale-95 transition-transform disabled:opacity-50"><Send size={16} fill="white"/></button>
+              </div>
+              <div className="text-center mt-4 space-y-2">
+                 <div className="inline-flex items-center justify-center gap-1.5 bg-red-50 px-3 py-1 rounded-full text-[10px] font-medium text-red-600/80"><Lock size={10}/> {t('confidentialDisclaimer')}</div>
+                 <div className="flex items-center justify-center gap-3 text-[10px] text-gray-300 font-medium tracking-wide"><span className="flex items-center gap-1"><Eye size={10}/> {t('auditDisclaimer')}</span><span>•</span><span>{t('aiDisclaimer')}</span></div>
+              </div>
+           </div>
+        </div>
+
+        {/* SIDEBAR (Metrics) - High Complexity Only */}
+        {isHighComplexity && (
+          <div className="order-3 lg:order-3 lg:col-span-3 bg-[#1c1c1e] text-gray-400 flex flex-col h-auto lg:h-[calc(100vh-80px)] rounded-[2rem] p-8 font-mono text-[10px] shadow-2xl shadow-gray-900/20 overflow-hidden relative animate-in slide-in-from-right-4 duration-500">
+             <div className="font-bold text-white mb-8 flex items-center gap-2 uppercase tracking-widest opacity-90"><Activity size={14} className="text-blue-500"/> {t('systemMetrics')}</div>
+             <div className="space-y-6 relative z-10">
+                <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-sm"><div className="text-gray-500 mb-2 tracking-wider">{t('status')}</div><div className={`text-xs font-bold flex items-center gap-2 ${loading?'text-yellow-400':'text-emerald-400'}`}><span className={`w-2 h-2 rounded-full ${loading?'bg-yellow-400 animate-pulse':'bg-emerald-400'}`}></span>{loading?t('processing'):t('operational')}</div></div>
+                <div className="space-y-3"><div className="flex justify-between text-xs"><span className="tracking-wider">{t('tokenStream')}</span><span className="text-blue-400 font-bold">42/s</span></div><div className="w-full bg-black/40 h-24 rounded-xl border border-white/5 flex items-end p-2 gap-[2px] overflow-hidden">{Array.from({length:24}).map((_,i)=><div key={i} className="flex-1 bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-[1px]" style={{height: `${20+Math.random()*80}%`, opacity: 0.4+Math.random()*0.6}}></div>)}</div></div>
+                <div className="space-y-3 pt-6 border-t border-white/10"><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Zap size={12} className="text-yellow-500"/> {t('latency')}</span><span className="text-white font-mono">24ms</span></div><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Cpu size={12} className="text-purple-500"/> {t('uptime')}</span><span className="text-white font-mono">99.9%</span></div></div>
+             </div>
+             <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-[80px] pointer-events-none"></div>
+             <div className="absolute bottom-0 left-0 w-full h-32 bg-gradient-to-t from-black to-transparent pointer-events-none"></div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
+export default function WrappedApp() { return <ErrorBoundary><AppContent /></ErrorBoundary>; }
