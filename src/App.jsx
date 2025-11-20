@@ -207,8 +207,9 @@ let db;
 try {
   const app = initializeApp(firebaseConfig);
   db = getFirestore(app);
+  console.log("Firebase Initialized");
 } catch (e) {
-  console.warn("Firebase not connected. Data will not save.");
+  console.error("Firebase Init Failed:", e);
 }
 
 // -----------------------------------------------------------------------------
@@ -350,7 +351,10 @@ export default function App() {
         });
         setSessionId(sessionRef.id);
         localSessionId = sessionRef.id;
-      } catch(e) { console.error("Session start failed", e); }
+      } catch(e) { 
+        console.error("Session start failed. Check Firestore Rules.", e);
+        alert("Error: Could not start session database recording. Please check console.");
+      }
     };
     startSession();
     const heartbeat = setInterval(async () => {
@@ -384,24 +388,16 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- DATA EXPORT (FIXED) ---
-  // Helper to safely parse dates
-  const parseFirestoreDate = (val) => {
-    if (!val) return null;
-    if (val.toDate && typeof val.toDate === 'function') return val.toDate(); // Firestore Timestamp
-    if (val instanceof Date) return val; // JS Date
-    if (typeof val === 'number' || typeof val === 'string') return new Date(val); // fallback
-    return null;
-  };
-
+  // --- DATA EXPORT ---
   const exportData = async () => {
     if (!db) return alert("Database not connected");
     try {
-      // Removed orderBy to prevent index error on first run. Sort in memory instead.
       const q = query(collection(db, "sessions"));
       const snapshot = await getDocs(q);
       
-      if (snapshot.empty) return alert("No data found. (Check Firestore Rules if you just started)");
+      if (snapshot.empty) {
+        return alert("No data found in 'sessions' collection. Please verify Firestore Rules are set to 'allow read/write'.");
+      }
       
       const students = {};
       const allDates = new Set();
@@ -412,25 +408,20 @@ export default function App() {
         const date = data.date_str || new Date().toISOString().split('T')[0];
         
         if (!students[sId]) {
-          students[sId] = { 
-            condition: data.condition_id, 
-            total_duration: 0, 
-            total_clicks: 0, 
-            total_sessions: 0, 
-            dates: {} 
-          };
+          students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
         
-        // Safe Duration Calculation
         let sessionDuration = 0;
-        const start = parseFirestoreDate(data.start_time);
-        const end = parseFirestoreDate(data.last_active);
-
+        // Robust Timestamp Parsing
+        let start = null;
+        let end = null;
+        
+        if (data.start_time && typeof data.start_time.toDate === 'function') start = data.start_time.toDate();
+        if (data.last_active && typeof data.last_active.toDate === 'function') end = data.last_active.toDate();
+        
         if (start && end) {
            sessionDuration = Math.round((end - start) / 60000);
            if (sessionDuration < 0) sessionDuration = 0;
-           // Cap crazy durations (e.g. left open overnight) for analysis sanity? 
-           // For now, raw data.
         }
         
         students[sId].total_duration += sessionDuration;
@@ -445,7 +436,6 @@ export default function App() {
       });
       
       const sortedDates = Array.from(allDates).sort();
-      
       let csvContent = "data:text/csv;charset=utf-8,Student_ID,Condition,Total_Sessions,Total_Active_Mins,Total_Clicks,Avg_Session_Length_Mins";
       sortedDates.forEach(date => { csvContent += `,${date}_Mins,${date}_Clicks`; });
       csvContent += "\n";
@@ -454,7 +444,6 @@ export default function App() {
         const s = students[sId];
         const avgSession = s.total_sessions > 0 ? (s.total_duration / s.total_sessions).toFixed(2) : 0;
         let row = `${sId},${s.condition},${s.total_sessions},${s.total_duration},${s.total_clicks},${avgSession}`;
-        
         sortedDates.forEach(date => {
           const dData = s.dates[date] || { duration: 0, clicks: 0 };
           row += `,${dData.duration},${dData.clicks}`;
@@ -469,10 +458,9 @@ export default function App() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      
     } catch (e) { 
-      console.error(e);
-      alert(`Export failed: ${e.message}. Check console for details.`); 
+      console.error("Export Error:", e);
+      alert(`Export failed: ${e.message}`); 
     }
   };
 
@@ -505,7 +493,7 @@ export default function App() {
       await setDoc(doc(db, "settings", "config"), { maintenance_mode: newState }, { merge: true });
     } catch(e) {
       console.error("Error toggling maintenance:", e);
-      alert("Failed to update maintenance mode.");
+      alert(`Failed to update maintenance mode: ${e.message} (Check Firestore Rules)`);
     }
   };
 
