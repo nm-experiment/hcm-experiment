@@ -22,7 +22,7 @@ import {
   Cpu,
   Zap,
   Eye,
-  FileText // Changed from FileJson to safer FileText
+  FileText
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -99,7 +99,7 @@ const TRANSLATIONS = {
     researcherMode: "Researcher Mode",
     locked: "Locked",
     unlocked: "Unlocked",
-    csvExport: "CSV Export",
+    csvExport: "Export CSV",
     jsonExport: "Raw JSON",
     systemMetrics: "System Metrics",
     analysis: "Analysis",
@@ -412,26 +412,11 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA (CLEANED & SAFE) ---
-  
-  const normalizeTime = (val) => {
-    try {
-      if (!val) return 0;
-      if (typeof val === 'number') return val; 
-      if (typeof val === 'object' && val.seconds) return val.seconds * 1000; 
-      if (typeof val === 'string') {
-          const d = new Date(val);
-          return isNaN(d.getTime()) ? 0 : d.getTime();
-      }
-      return 0; 
-    } catch(e) {
-      return 0;
-    }
-  };
-
+  // --- EXPORT DATA (FLAT & SAFE) ---
+  // This exports ONE ROW PER SESSION. No aggregation inside the app.
   const exportData = async () => {
     if (!db) return alert("Database not connected");
-    console.log("Starting export...");
+    console.log("Starting flat export...");
     
     try {
       const q = query(collection(db, "sessions"));
@@ -439,71 +424,40 @@ export default function App() {
       
       if (snapshot.empty) return alert("No data found.");
       
-      const students = {};
-      const allDates = new Set();
+      // HEADER
+      let csv = "Session_ID,Student_ID,Condition,Date_Str,Start_Unix,Last_Active_Unix,Duration_Mins,Clicks\n";
       
       snapshot.forEach(docSnap => {
+        // Safe data extraction inside try/catch per row
         try {
-          const data = docSnap.data();
-          const sId = data.student_id || "Unknown";
+          const d = docSnap.data();
+          const sId = d.student_id || "Unknown";
+          const cond = d.condition_id || 0;
+          const date = d.date_str || "Unknown";
+          const clicks = d.interaction_count || 0;
           
-          let dateStr = data.date_str;
-          if (!dateStr) {
-              const anyTime = data.start_unix || data.client_timestamp || data.start_time;
-              const ms = normalizeTime(anyTime);
-              if (ms > 0) dateStr = new Date(ms).toISOString().split('T')[0];
-              else dateStr = "Unknown-Date";
-          }
-          
-          if (!students[sId]) {
-            students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
-          }
-          
-          const startMs = normalizeTime(data.start_unix) || normalizeTime(data.client_timestamp) || normalizeTime(data.start_time);
-          const endMs = normalizeTime(data.last_active_unix) || normalizeTime(data.last_active);
+          // Use ONLY the _unix fields if available, default to 0
+          const start = typeof d.start_unix === 'number' ? d.start_unix : 0;
+          const end = typeof d.last_active_unix === 'number' ? d.last_active_unix : 0;
           
           let duration = 0;
-          if (startMs > 0 && endMs > 0 && endMs > startMs) {
-             duration = Math.round((endMs - startMs) / 60000);
+          if (start > 0 && end > 0 && end > start) {
+             duration = Math.round((end - start) / 60000);
           }
           
-          const clicks = data.interaction_count || 0;
-
-          students[sId].total_duration += duration;
-          students[sId].total_clicks += clicks;
-          students[sId].total_sessions += 1;
+          csv += `${docSnap.id},${sId},${cond},${date},${start},${end},${duration},${clicks}\n`;
           
-          allDates.add(dateStr);
-          
-          if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
-          students[sId].dates[dateStr].duration += duration;
-          students[sId].dates[dateStr].clicks += clicks;
         } catch (rowError) {
-            console.warn("Skipped malformed row:", docSnap.id);
+           console.warn("Skipping bad row", docSnap.id);
         }
       });
       
-      const sortedDates = Array.from(allDates).sort();
-      let csv = "data:text/csv;charset=utf-8,Student_ID,Condition,Total_Sessions,Total_Active_Mins,Total_Clicks,Avg_Session_Mins";
-      sortedDates.forEach(d => { csv += `,${d}_Mins,${d}_Clicks`; });
-      csv += "\n";
-      
-      Object.keys(students).forEach(sId => {
-        const s = students[sId];
-        const avg = s.total_sessions > 0 ? (s.total_duration / s.total_sessions).toFixed(1) : 0;
-        let row = `${sId},${s.condition},${s.total_sessions},${s.total_duration},${s.total_clicks},${avg}`;
-        
-        sortedDates.forEach(d => {
-          const v = s.dates[d] || { duration: 0, clicks: 0 };
-          row += `,${v.duration},${v.clicks}`;
-        });
-        csv += row + "\n";
-      });
-      
-      const encodedUri = encodeURI(csv);
+      // DOWNLOAD
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.setAttribute("href", encodedUri);
-      link.setAttribute("download", "hcm_data.csv");
+      link.href = url;
+      link.download = "hcm_sessions_flat.csv";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -660,12 +614,9 @@ export default function App() {
             {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {t('confidence')}: {confidence}%</span>}
           </div>
           <div className="flex border-b border-gray-100">
-            {['Summary','Raw Data'].map(rawT => {
-              const localizedT = rawT === 'Summary' ? t('summary') : t('rawData');
-              return (
-                <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
-              );
-            })}
+            {['Summary','Raw Data'].map(rawT => (
+              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
+            ))}
           </div>
           <div className="p-6">
             {tab==='summary' && (
