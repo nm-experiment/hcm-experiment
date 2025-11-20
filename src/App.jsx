@@ -366,15 +366,9 @@ export default function App() {
       } catch(e) { console.error("Session start error:", e); }
     };
     startSession();
-    const heartbeat = setInterval(async () => {
-      if (localSessionId) { // Logic simplified, using closure scope of effect would need ref
-        // Heartbeat kept simple in this version to avoid closure issues
-      }
-    }, 60000);
-    return () => clearInterval(heartbeat);
   }, [isLoggedIn, isAuthReady]);
 
-  // Heartbeat separate effect using Ref for sessionId to avoid closure stale state
+  // HEARTBEAT (Separate Effect for Stability)
   const sessionIdRef = useRef(sessionId);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
@@ -414,7 +408,7 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA ---
+  // --- EXPORT DATA (CRASH PROOF) ---
   const exportData = async () => {
     if (!db) return alert("Database not connected");
     try {
@@ -428,12 +422,20 @@ export default function App() {
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
         const sId = data.student_id || "Unknown";
-        let dateStr = data.date_str || "Unknown-Date";
+        
+        // ROBUST DATE HANDLING
+        let dateStr = data.date_str;
+        if (!dateStr) {
+           // Fallback using seconds property if timestamp object
+           const ts = data.start_time?.seconds ? new Date(data.start_time.seconds * 1000) : new Date();
+           dateStr = ts.toISOString().split('T')[0];
+        }
         
         if (!students[sId]) {
           students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
         
+        // Calculate Duration safely using numeric fields
         let duration = 0;
         const start = data.client_timestamp || 0;
         const end = data.last_active || 0;
@@ -471,7 +473,10 @@ export default function App() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    } catch (e) { alert(`Export failed: ${e.message}`); }
+    } catch (e) { 
+      console.error("Export failed:", e);
+      alert(`Export failed: ${e.message}`); 
+    }
   };
 
   // --- HANDLERS ---
@@ -497,7 +502,7 @@ export default function App() {
   };
 
   const toggleMaintenanceMode = async () => {
-    if (!db) return;
+    if (!db || !auth.currentUser) return alert("Not authenticated with DB.");
     try {
       const newState = !isMaintenanceMode;
       await setDoc(doc(db, "settings", "config"), { maintenance_mode: newState }, { merge: true });
@@ -532,14 +537,23 @@ export default function App() {
     setLoading(false);
   };
 
+  const validateAndSetFile = (file) => {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+       alert("File Type not Supported. Allowed: PDF, DOCX, PPTX, XLSX, CSV"); 
+       return;
+    }
+    if (file.size > 500 * 1024) { 
+      alert("File exceeds limit. Only one file with up to two pages is permitted.");
+      return;
+    }
+    setCurrentFile(file);
+    logInteraction("FILE_UPLOAD", { name: file.name, size: file.size });
+  };
+
   const handleFileSelect = (e) => {
     const f = e.target.files[0];
-    if (!f) return;
-    const ext = f.name.split('.').pop().toLowerCase();
-    if (!ALLOWED_EXTENSIONS.includes(ext)) return alert("File Type not Supported.");
-    if (f.size > 500 * 1024) return alert("File exceeds limit (Max 500KB/2 pages).");
-    setCurrentFile(f);
-    logInteraction("FILE_UPLOAD", { name: f.name, size: f.size });
+    if (f) validateAndSetFile(f);
   };
 
   const handleDrop = (e) => {
@@ -547,11 +561,8 @@ export default function App() {
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       if (e.dataTransfer.files.length > 1) return alert("Only one file is permitted.");
       const f = e.dataTransfer.files[0];
-      const ext = f.name.split('.').pop().toLowerCase();
-      if (!ALLOWED_EXTENSIONS.includes(ext)) return alert("File Type not Supported.");
-      if (f.size > 500 * 1024) return alert("File exceeds limit.");
-      setCurrentFile(f);
-      logInteraction("FILE_UPLOAD", { name: f.name, size: f.size });
+      validateAndSetFile(f);
+      e.dataTransfer.clearData();
     }
   };
 
