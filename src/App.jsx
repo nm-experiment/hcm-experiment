@@ -408,15 +408,21 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA (UPDATED: Raw Data Parsing) ---
-  const parseDate = (val) => {
-    if (!val) return null;
-    // Case 1: Firestore Timestamp Object with seconds
-    if (val.seconds !== undefined && typeof val.seconds === 'number') return new Date(val.seconds * 1000);
-    // Case 2: Standard Date object
-    if (val instanceof Date) return val;
-    // Case 3: Numeric or String timestamp
-    return new Date(val); 
+  // --- EXPORT DATA (CRASH PROOF v2) ---
+  
+  const getSafeMillis = (val) => {
+    if (!val) return 0;
+    if (typeof val === 'number') return val;
+    try {
+       // Try standard JS date
+       if (val instanceof Date) return val.getTime();
+       // Try Firestore Timestamp methods if available
+       if (val.toMillis && typeof val.toMillis === 'function') return val.toMillis();
+       if (val.seconds) return val.seconds * 1000;
+    } catch(e) {
+       return 0;
+    }
+    return 0;
   };
 
   const exportData = async () => {
@@ -435,25 +441,26 @@ export default function App() {
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
         const sId = data.student_id || "Unknown";
-        
-        let dateStr = data.date_str;
-        if (!dateStr) {
-            const d = parseDate(data.start_time);
-            dateStr = d && !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : "Unknown";
-        }
+        let dateStr = data.date_str || "Unknown-Date";
         
         if (!students[sId]) {
           students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
         
+        // Use NUMERIC timestamps only - bypassing functions that crash
+        let start = 0;
+        let end = 0;
+
+        // Prioritize simple number fields
+        if (typeof data.client_timestamp === 'number') start = data.client_timestamp;
+        else start = getSafeMillis(data.start_time);
+
+        if (typeof data.last_active === 'number') end = data.last_active;
+        else end = getSafeMillis(data.last_active);
+
         let duration = 0;
-        // Use parsed values
-        const start = parseDate(data.client_timestamp || data.start_time);
-        const end = parseDate(data.last_active);
-        
-        if (start && end && !isNaN(start.getTime()) && !isNaN(end.getTime())) {
-           const ms = end.getTime() - start.getTime();
-           if (ms > 0) duration = Math.round(ms / 60000);
+        if (start > 0 && end > 0 && end > start) {
+           duration = Math.round((end - start) / 60000);
         }
         
         students[sId].total_duration += duration;
@@ -489,7 +496,7 @@ export default function App() {
       link.click();
       document.body.removeChild(link);
     } catch (e) { 
-      console.error("Export failed:", e);
+      console.error("Export Crash:", e);
       alert(`Export failed: ${e.message}`); 
     }
   };
