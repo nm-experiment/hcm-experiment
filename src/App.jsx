@@ -27,6 +27,8 @@ import {
 
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
+// Import Authentication functions
+import { getAuth, signInAnonymously } from "firebase/auth";
 import { 
   getFirestore, 
   collection, 
@@ -109,6 +111,7 @@ const TRANSLATIONS = {
     rawData: "Raw Data",
     logicFlow: "Logic Flow",
     reasoning: "Reasoning",
+    confidence: "Confidence",
     signInTitle: "Sign in with your Participant ID",
     hcmTitle: "HCM Data Lab"
   },
@@ -144,6 +147,7 @@ const TRANSLATIONS = {
     rawData: "Rohdaten",
     logicFlow: "Logikfluss",
     reasoning: "Begründung",
+    confidence: "Konfidenz",
     signInTitle: "Melden Sie sich mit Ihrer Teilnehmer-ID an",
     hcmTitle: "HCM Datenlabor"
   },
@@ -179,6 +183,7 @@ const TRANSLATIONS = {
     rawData: "Dati Grezzi",
     logicFlow: "Flusso Logico",
     reasoning: "Ragionamento",
+    confidence: "Confidenza",
     signInTitle: "Accedi con il tuo ID Partecipante",
     hcmTitle: "Laboratorio Dati HCM"
   }
@@ -207,13 +212,15 @@ const getConditionFromId = (studentId) => {
 const ALLOWED_EXTENSIONS = ['pdf', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt'];
 
 let db;
+let auth; // Auth instance
 let analytics;
 
 try {
   const app = initializeApp(firebaseConfig);
   db = getFirestore(app);
+  auth = getAuth(app); // Initialize Auth
   analytics = getAnalytics(app);
-  console.log("Firebase Initialized");
+  console.log("Firebase & Auth Initialized");
 } catch (e) {
   console.error("Firebase Init Failed:", e);
 }
@@ -228,7 +235,6 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
   const languageInstruction = `Respond in ${langMap[lang] || "English"}.`;
   
-  // GUARDRAIL SYSTEM PROMPT
   const systemPrompt = `
     You are a specialized HCM (Human Capital Management) Analytics assistant for a university experiment. ${languageInstruction}
     
@@ -296,6 +302,7 @@ export default function App() {
   const [isResearcherMode, setIsResearcherMode] = useState(false);
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
   const [lang, setLang] = useState('en'); 
+  const [isAuthReady, setIsAuthReady] = useState(false); // New state for Auth check
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -314,14 +321,21 @@ export default function App() {
 
   const t = (key) => TRANSLATIONS[lang][key] || key;
 
-  // --- EFFECT: AUTO SCROLL TO BOTTOM ---
+  // --- AUTH & GLOBAL SETTINGS ---
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory, loading]);
+    if (!db || !auth) return;
 
-  // --- GLOBAL SETTINGS LISTENER ---
-  useEffect(() => {
-    if (!db) return;
+    // 1. Silent Anonymous Auth
+    signInAnonymously(auth)
+      .then(() => {
+        console.log("Anonymous Auth Successful");
+        setIsAuthReady(true);
+      })
+      .catch((error) => {
+        console.error("Auth Failed:", error);
+      });
+
+    // 2. Listen for Settings
     const unsub = onSnapshot(doc(db, "settings", "config"), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
@@ -330,6 +344,11 @@ export default function App() {
     });
     return () => unsub();
   }, []);
+
+  // --- EFFECT: AUTO SCROLL TO BOTTOM ---
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory, loading]);
 
   // --- AUTO-LOGIN ---
   useEffect(() => {
@@ -341,7 +360,9 @@ export default function App() {
 
   // --- SESSION MANAGEMENT ---
   useEffect(() => {
-    if (!isLoggedIn || !db) return;
+    // Only start session if user has clicked login AND we have anonymous auth
+    if (!isLoggedIn || !db || !isAuthReady) return;
+
     let localSessionId = null;
     const startSession = async () => {
       try {
@@ -357,9 +378,9 @@ export default function App() {
         });
         setSessionId(sessionRef.id);
         localSessionId = sessionRef.id;
+        console.log("Session Started:", localSessionId);
       } catch(e) { 
-        console.error("Session start failed. Check Firestore Rules.", e);
-        alert("Error: Could not start session database recording. Please check console.");
+        console.error("Session start failed.", e);
       }
     };
     startSession();
@@ -370,7 +391,7 @@ export default function App() {
       }
     }, 60000);
     return () => clearInterval(heartbeat);
-  }, [isLoggedIn]);
+  }, [isLoggedIn, isAuthReady]);
 
   // --- LOGGING ---
   const logInteraction = async (type, payload) => {
@@ -395,14 +416,23 @@ export default function App() {
   }, [lastResponseTimestamp]);
 
   // --- DATA EXPORT ---
+  const parseDate = (val) => {
+    if (!val) return null;
+    if (val.toDate && typeof val.toDate === 'function') return val.toDate();
+    if (val instanceof Date) return val;
+    return new Date(val); 
+  };
+
   const exportData = async () => {
     if (!db) return alert("Database not connected");
+    console.log("Starting export...");
+    
     try {
       const q = query(collection(db, "sessions"));
       const snapshot = await getDocs(q);
       
       if (snapshot.empty) {
-        return alert("No data found in 'sessions' collection. Please verify Firestore Rules are set to 'allow read/write'.");
+        return alert("Database is empty. No sessions recorded yet.");
       }
       
       const students = {};
@@ -411,19 +441,19 @@ export default function App() {
       snapshot.forEach(doc => {
         const data = doc.data();
         const sId = data.student_id || "Unknown";
-        const date = data.date_str || new Date().toISOString().split('T')[0];
+        let dateStr = data.date_str;
+        if (!dateStr) {
+            const d = parseDate(data.start_time);
+            dateStr = d ? d.toISOString().split('T')[0] : "Unknown-Date";
+        }
         
         if (!students[sId]) {
           students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
         
         let sessionDuration = 0;
-        // Robust Timestamp Parsing
-        let start = null;
-        let end = null;
-        
-        if (data.start_time && typeof data.start_time.toDate === 'function') start = data.start_time.toDate();
-        if (data.last_active && typeof data.last_active.toDate === 'function') end = data.last_active.toDate();
+        const start = parseDate(data.start_time);
+        const end = parseDate(data.last_active);
         
         if (start && end) {
            sessionDuration = Math.round((end - start) / 60000);
@@ -434,11 +464,11 @@ export default function App() {
         students[sId].total_clicks += (data.interaction_count || 0);
         students[sId].total_sessions += 1;
         
-        allDates.add(date);
+        allDates.add(dateStr);
         
-        if (!students[sId].dates[date]) students[sId].dates[date] = { duration: 0, clicks: 0 };
-        students[sId].dates[date].duration += sessionDuration;
-        students[sId].dates[date].clicks += (data.interaction_count || 0);
+        if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
+        students[sId].dates[dateStr].duration += sessionDuration;
+        students[sId].dates[dateStr].clicks += (data.interaction_count || 0);
       });
       
       const sortedDates = Array.from(allDates).sort();
@@ -464,8 +494,9 @@ export default function App() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      
     } catch (e) { 
-      console.error("Export Error:", e);
+      console.error("Export Crash:", e);
       alert(`Export failed: ${e.message}`); 
     }
   };
@@ -499,7 +530,7 @@ export default function App() {
       await setDoc(doc(db, "settings", "config"), { maintenance_mode: newState }, { merge: true });
     } catch(e) {
       console.error("Error toggling maintenance:", e);
-      alert(`Failed to update maintenance mode: ${e.message} (Check Firestore Rules)`);
+      alert(`Failed to update maintenance mode: ${e.message}. Check Firestore permissions.`);
     }
   };
 
@@ -536,20 +567,15 @@ export default function App() {
   // VALIDATES FILE SIZE AND TYPE
   const validateAndSetFile = (file) => {
     const ext = file.name.split('.').pop().toLowerCase();
-    
-    // Type Check
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
        alert("File Type not Supported. Allowed: PDF, DOCX, PPTX, XLSX, CSV"); 
        return;
     }
-    
-    // Size Check (Proxy for Page Limit)
     // Limit: 500KB (~2 text-heavy pages)
     if (file.size > 500 * 1024) { 
       alert("File exceeds limit. Only one file with up to two pages is permitted.");
       return;
     }
-
     setCurrentFile(file);
     logInteraction("FILE_UPLOAD", { name: file.name, size: file.size });
   };
@@ -580,12 +606,9 @@ export default function App() {
   const LanguageSwitcher = () => {
     let label = "";
     let flag = "";
-    
-    // Logic: Button shows what you SWITCH TO (next in cycle)
     if (lang === 'en') { flag = "🇨🇭"; label = "Deutsch"; }
     else if (lang === 'de') { flag = "🇮🇹"; label = "Italiano"; }
     else { flag = "🇬🇧"; label = "English"; }
-
     return (
       <button 
         onClick={cycleLanguage}
@@ -624,7 +647,7 @@ export default function App() {
         <div className="mb-8 bg-white/80 backdrop-blur-xl border border-white/20 rounded-3xl shadow-xl shadow-gray-200/50 overflow-hidden animate-in slide-in-from-bottom-4 duration-700">
           <div className="bg-gray-50/50 px-5 py-3 border-b border-gray-100 flex justify-between items-center">
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{t('analysis')}</span>
-            {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {Math.floor(msg.confidence_score*100)}%</span>}
+            {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {t('confidence')}: {Math.floor(msg.confidence_score*100)}%</span>}
           </div>
           <div className="flex border-b border-gray-100">
             {['Summary','Raw Data'].map(rawT => {
@@ -663,8 +686,11 @@ export default function App() {
            </div>
            {isHighTransparency && msg.reasoning_trace && (
               <div className="ml-1 mt-2 p-4 bg-white/70 border border-gray-200/50 rounded-2xl text-xs text-gray-500 shadow-sm backdrop-blur-md">
-                <div className="flex items-center gap-1.5 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider">
+                <div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider">
                   <Sparkles size={10}/> {t('reasoning')}
+                  <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">
+                    {t('confidence')}: {Math.floor(msg.confidence_score*100)}%
+                  </span>
                 </div>
                 <div className="leading-relaxed opacity-80">{msg.reasoning_trace}</div>
               </div>
@@ -820,7 +846,7 @@ export default function App() {
            <div className="p-3">
              <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} accept=".pdf,.csv,.xlsx,.docx"/>
              <div 
-               onClick={()=>!currentFile?fileInputRef.current.click():alert("Max files reached")} 
+               onClick={()=>!currentFile?fileInputRef.current.click():alert("Max files reached (1)")} 
                onDragOver={(e) => e.preventDefault()}
                onDrop={handleDrop}
                className={`mx-4 rounded-2xl border border-dashed transition-all duration-300 cursor-pointer flex items-center justify-center gap-3 h-16 group
