@@ -19,7 +19,10 @@ import {
   Sparkles,
   Unlock,
   ChevronRight,
-  Globe
+  Globe,
+  Cpu,
+  Zap,
+  Eye
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -40,6 +43,9 @@ import {
 // -----------------------------------------------------------------------------
 // 1. CONFIGURATION AREA
 // -----------------------------------------------------------------------------
+
+// SECURE ADMIN PASSWORD
+const ADMIN_PASSWORD = "Ug5Bgrb9uU%@k7@pNMSFd1TdvUcyA@";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAa_uOiuWDT2d1N06VK6L-S7B5E-kwp4-s",
@@ -87,6 +93,7 @@ const TRANSLATIONS = {
     topP: "Top P",
     aiDisclaimer: "AI can make mistakes. Verify important information.",
     confidentialDisclaimer: "Please do not enter personal or confidential information.",
+    auditDisclaimer: "Session activity logged for research integrity.",
     maintenanceTitle: "Be back soon.",
     maintenanceText: "We are performing scheduled updates to the HCM Data Lab. The experiment will resume shortly.",
     researcherMode: "Researcher Mode",
@@ -121,6 +128,7 @@ const TRANSLATIONS = {
     topP: "Top P",
     aiDisclaimer: "KI kann Fehler machen. Überprüfen Sie wichtige Informationen.",
     confidentialDisclaimer: "Bitte geben Sie keine persönlichen oder vertraulichen Informationen ein.",
+    auditDisclaimer: "Sitzungsaktivität wird aus Forschungsgründen protokolliert.",
     maintenanceTitle: "Bald zurück.",
     maintenanceText: "Wir führen geplante Updates am HCM Data Lab durch. Das Experiment wird in Kürze fortgesetzt.",
     researcherMode: "Forschermodus",
@@ -175,12 +183,22 @@ try {
 const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const config = LLM_CONFIG.providers[LLM_CONFIG.activeProvider];
   
-  // Instruct AI to respond in the selected language
   const languageInstruction = lang === 'de' ? "Respond in German (Deutsch)." : "Respond in English.";
   
-  const systemPrompt = `You are an expert HCM Analytics assistant. ${languageInstruction}
-  ${conditionId === 3 || conditionId === 4 ? "Direct answer only. No reasoning." : "Explain reasoning clearly."}
-  Context: ${contextFilename || "General Knowledge"}`;
+  // GUARDRAIL SYSTEM PROMPT
+  const systemPrompt = `
+    You are a specialized HCM (Human Capital Management) Analytics assistant for a university experiment. ${languageInstruction}
+    
+    STRICT GUARDRAILS:
+    1. You must ONLY answer questions related to Human Resources, Data Analysis, Workforce Planning, Statistics, and the provided dataset.
+    2. If the user asks about unrelated topics (e.g., "write a poem", "history of Rome", "coding a game"), politely decline. State that you are restricted to the HCM Experiment context.
+    3. Do not solve general homework problems unless they involve calculating metrics from the HR data.
+
+    Condition Settings:
+    ${conditionId === 3 || conditionId === 4 ? "Direct answer only. No reasoning." : "Explain reasoning clearly."}
+    
+    Context: ${contextFilename || "General Knowledge"}
+  `;
 
   try {
     const response = await fetch(config.url, {
@@ -234,7 +252,7 @@ export default function App() {
   const [condition, setCondition] = useState(1);
   const [isResearcherMode, setIsResearcherMode] = useState(false);
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
-  const [lang, setLang] = useState('en'); // 'en' or 'de'
+  const [lang, setLang] = useState('en'); 
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -242,6 +260,7 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState([]);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
+  const bottomRef = useRef(null);
 
   const [sessionId, setSessionId] = useState(null);
   const [lastResponseTimestamp, setLastResponseTimestamp] = useState(null);
@@ -250,10 +269,14 @@ export default function App() {
   const isHighComplexity = [2, 4].includes(condition);
   const isHighTransparency = [1, 2].includes(condition);
 
-  // Translation Helper
   const t = (key) => TRANSLATIONS[lang][key] || key;
 
-  // --- GLOBAL SETTINGS LISTENER (MAINTENANCE MODE) ---
+  // --- EFFECT: AUTO SCROLL TO BOTTOM ---
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory, loading]);
+
+  // --- GLOBAL SETTINGS LISTENER ---
   useEffect(() => {
     if (!db) return;
     const unsub = onSnapshot(doc(db, "settings", "config"), (docSnap) => {
@@ -265,7 +288,7 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // --- AUTO-LOGIN (STICKY SESSION) ---
+  // --- AUTO-LOGIN ---
   useEffect(() => {
     const savedId = localStorage.getItem("hcm_student_id");
     if (savedId) {
@@ -384,7 +407,7 @@ export default function App() {
     setLoginError(""); 
     const cleanedId = studentId.trim();
     if (!ID_REGEX.test(cleanedId)) {
-      setLoginError(t('formatHint')); // Localize error
+      setLoginError(t('formatHint')); 
       return;
     }
     localStorage.setItem("hcm_student_id", cleanedId);
@@ -395,7 +418,7 @@ export default function App() {
   const handleResearcherToggle = (e) => {
     if (e.target.checked) {
       const pwd = prompt("Enter Administrator Password:");
-      if (pwd === "Ug5Bgrb9uU%@k7@pNMSFd1TdvUcyA@") setIsResearcherMode(true);
+      if (pwd === ADMIN_PASSWORD) setIsResearcherMode(true);
       else alert("Access Denied.");
     } else setIsResearcherMode(false);
   };
@@ -413,7 +436,7 @@ export default function App() {
 
   const unlockMaintenance = () => {
     const pwd = prompt("Enter Administrator Password to Unlock:");
-    if (pwd === "Ug5Bgrb9uU%@k7@pNMSFd1TdvUcyA@") {
+    if (pwd === ADMIN_PASSWORD) {
       setIsResearcherMode(true); 
       setIsMaintenanceMode(false); 
     } else {
@@ -430,7 +453,6 @@ export default function App() {
     setQuery("");
     
     const start = Date.now();
-    // Pass language to LLM call
     const res = await callLLM(userMsg.text, currentFile?.name, condition, params, lang);
     const latency = Date.now() - start;
 
@@ -455,30 +477,31 @@ export default function App() {
     logInteraction("FILE_UPLOAD", { name: f.name });
   };
 
-  // --- LANGUAGE SWITCHER COMPONENT ---
   const LanguageSwitcher = () => (
     <button 
       onClick={() => setLang(lang === 'en' ? 'de' : 'en')}
       className="fixed top-6 right-6 z-50 bg-white/80 backdrop-blur-md border border-gray-200 shadow-lg px-4 py-2 rounded-full flex items-center gap-2 text-sm font-medium text-gray-700 hover:bg-white hover:scale-105 transition-all duration-300"
     >
-      {lang === 'en' ? (
-        <>
-          <span className="text-lg">🇨🇭</span>
-          <span>Deutsch</span>
-        </>
-      ) : (
-        <>
-          <span className="text-lg">🇬🇧</span>
-          <span>English</span>
-        </>
-      )}
+      {lang === 'en' ? <><span className="text-lg">🇨🇭</span><span>Deutsch</span></> : <><span className="text-lg">🇬🇧</span><span>English</span></>}
     </button>
+  );
+
+  // --- LOADING SKELETON ---
+  const LoadingSkeleton = () => (
+    <div className="max-w-3xl mr-auto flex gap-4 items-start animate-pulse">
+      <div className="w-8 h-8 rounded-full bg-gray-200 flex-shrink-0"></div>
+      <div className="flex-1 space-y-2">
+         <div className="h-4 bg-gray-200 rounded-md w-3/4"></div>
+         <div className="h-4 bg-gray-200 rounded-md w-1/2"></div>
+         <div className="h-4 bg-gray-200 rounded-md w-2/3"></div>
+      </div>
+    </div>
   );
 
   const MessageRenderer = ({ msg }) => {
     if (msg.type === 'user') return (
-      <div className="flex justify-end mb-4">
-        <div className="bg-[#007AFF] text-white px-4 py-2.5 rounded-2xl rounded-tr-none max-w-[85%] text-[15px] shadow-sm leading-relaxed font-normal tracking-wide">
+      <div className="flex justify-end mb-6 animate-in slide-in-from-bottom-2 duration-500">
+        <div className="bg-[#007AFF] text-white px-5 py-3 rounded-[1.3rem] rounded-tr-none max-w-[85%] text-[15px] shadow-md shadow-blue-500/10 leading-relaxed tracking-wide font-normal">
           {msg.text}
         </div>
       </div>
@@ -487,8 +510,8 @@ export default function App() {
     if (isHighComplexity) {
       const [tab, setTab] = useState('summary');
       return (
-        <div className="mb-6 bg-white/80 backdrop-blur-xl border border-white/20 rounded-2xl shadow-lg overflow-hidden">
-          <div className="bg-gray-50/50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
+        <div className="mb-8 bg-white/80 backdrop-blur-xl border border-white/20 rounded-3xl shadow-xl shadow-gray-200/50 overflow-hidden animate-in slide-in-from-bottom-4 duration-700">
+          <div className="bg-gray-50/50 px-5 py-3 border-b border-gray-100 flex justify-between items-center">
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{t('analysis')}</span>
             {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {Math.floor(msg.confidence_score*100)}%</span>}
           </div>
@@ -496,16 +519,16 @@ export default function App() {
             {['Summary','Raw Data'].map(rawT => {
               const localizedT = rawT === 'Summary' ? t('summary') : t('rawData');
               return (
-                <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2 text-xs font-medium transition-colors ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{localizedT}</button>
+                <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all duration-300 ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600 hover:bg-gray-50/50'}`}>{localizedT}</button>
               );
             })}
           </div>
-          <div className="p-5">
+          <div className="p-6">
             {tab==='summary' && (
               <div className="space-y-4">
                 <p className="text-gray-800 text-sm leading-7 font-normal">{msg.answer}</p>
                 {isHighTransparency && msg.reasoning_trace && (
-                  <div className="mt-4 pt-4 border-t border-gray-100">
+                  <div className="mt-6 pt-4 border-t border-gray-100">
                     <h4 className="text-[10px] font-bold text-gray-400 mb-3 flex gap-1 uppercase tracking-wider"><Terminal size={10}/> {t('logicFlow')}</h4>
                     <div className="font-mono text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100 leading-relaxed">{msg.reasoning_trace}</div>
                   </div>
@@ -519,17 +542,17 @@ export default function App() {
     }
 
     return (
-      <div className="mb-6 max-w-3xl mr-auto flex gap-4 items-start">
-        <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 flex-shrink-0 shadow-inner">
-          <Brain size={16}/>
+      <div className="mb-8 max-w-3xl mr-auto flex gap-4 items-start animate-in slide-in-from-bottom-2 duration-500">
+        <div className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-500 flex-shrink-0 shadow-sm">
+          <Brain size={18} strokeWidth={1.5}/>
         </div>
         <div className="space-y-2 min-w-0 flex-1">
-           <div className="bg-[#E9E9EB] text-gray-900 px-4 py-2.5 rounded-2xl rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">
+           <div className="bg-[#F2F2F7] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">
              {msg.answer}
            </div>
            {isHighTransparency && msg.reasoning_trace && (
-              <div className="ml-1 mt-2 p-3 bg-white/60 border border-gray-200/60 rounded-xl text-xs text-gray-500 shadow-sm backdrop-blur-sm">
-                <div className="flex items-center gap-1.5 font-semibold mb-1 text-gray-400 text-[10px] uppercase tracking-wider">
+              <div className="ml-1 mt-2 p-4 bg-white/70 border border-gray-200/50 rounded-2xl text-xs text-gray-500 shadow-sm backdrop-blur-md">
+                <div className="flex items-center gap-1.5 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider">
                   <Sparkles size={10}/> {t('reasoning')}
                 </div>
                 <div className="leading-relaxed opacity-80">{msg.reasoning_trace}</div>
@@ -564,21 +587,21 @@ export default function App() {
 
   // --- LOGIN UI ---
   if (!isLoggedIn) return (
-    <div className="min-h-screen bg-[#F5F5F7] flex items-center justify-center p-4 font-sans">
+    <div className="min-h-screen bg-[#F5F5F7] flex items-center justify-center p-4 font-sans text-gray-900 selection:bg-blue-100">
       <LanguageSwitcher />
-      <div className="bg-white/80 backdrop-blur-2xl p-10 rounded-[2.5rem] shadow-2xl w-full max-w-[24rem] border border-white/50">
+      <div className="bg-white/80 backdrop-blur-2xl p-10 rounded-[2.5rem] shadow-2xl w-full max-w-[24rem] border border-white/50 animate-in fade-in zoom-in duration-500">
         <div className="text-center mb-10">
-          <div className="w-16 h-16 bg-gradient-to-br from-gray-900 to-gray-700 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg text-white">
+          <div className="w-16 h-16 bg-gradient-to-br from-gray-800 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-black/20 text-white transform transition-transform hover:scale-105 duration-500">
             <Database size={28} strokeWidth={1.5} />
           </div>
           <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">{t('hcmTitle')}</h1>
-          <p className="text-sm text-gray-400 mt-2 font-medium">{t('signInTitle')}</p>
+          <p className="text-sm text-gray-400 mt-2 font-medium tracking-wide">{t('signInTitle')}</p>
         </div>
         
         <form onSubmit={handleLogin} className="space-y-6">
           <div className="space-y-2">
             <div className="relative group">
-              <User className="absolute left-4 top-3.5 text-gray-400 transition-colors group-focus-within:text-blue-500" size={18} strokeWidth={2}/>
+              <User className="absolute left-4 top-3.5 text-gray-400 transition-colors group-focus-within:text-blue-600" size={18} strokeWidth={2}/>
               <input 
                 type="text" 
                 value={studentId} 
@@ -596,16 +619,16 @@ export default function App() {
             )}
           </div>
 
-          <button type="submit" className="w-full bg-gray-900 hover:bg-black text-white py-3.5 rounded-2xl font-medium text-[15px] flex items-center justify-center gap-2 transition-all transform active:scale-[0.98] shadow-lg shadow-gray-900/20">
+          <button type="submit" className="w-full bg-gray-900 hover:bg-black text-white py-3.5 rounded-2xl font-medium text-[15px] flex items-center justify-center gap-2 transition-all transform active:scale-[0.98] shadow-lg shadow-gray-900/20 hover:shadow-xl hover:shadow-gray-900/30">
             <span>{t('enterLab')}</span>
             <ChevronRight size={16} />
           </button>
           
           <div className="pt-8 border-t border-gray-100 flex flex-col gap-4">
-             <label className="flex items-center gap-3 cursor-pointer group">
+             <label className="flex items-center gap-3 cursor-pointer group justify-center">
                 <div className="relative">
                   <input type="checkbox" checked={isResearcherMode} onChange={handleResearcherToggle} className="peer sr-only"/>
-                  <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500"></div>
+                  <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-gray-900"></div>
                 </div>
                 <span className="text-xs text-gray-400 font-medium group-hover:text-gray-600 transition-colors">{t('researcherMode')}</span>
              </label>
@@ -629,13 +652,13 @@ export default function App() {
 
   // --- MAIN UI ---
   return (
-    <div className="min-h-screen bg-[#F5F5F7] flex flex-col font-sans text-gray-900">
+    <div className="min-h-screen bg-[#F5F5F7] flex flex-col font-sans text-gray-900 selection:bg-blue-100">
       <LanguageSwitcher />
       {isResearcherMode && (
-        <div className="bg-gray-900 text-white/80 py-2 px-6 text-[10px] font-medium flex justify-between items-center tracking-wide backdrop-blur-md sticky top-0 z-50">
+        <div className="bg-gray-900 text-white/80 py-2 px-6 text-[10px] font-medium flex justify-between items-center tracking-wide backdrop-blur-md sticky top-0 z-50 shadow-lg">
            <span className="flex items-center gap-2"><Terminal size={10}/> {CONDITIONS[condition].name} — {studentId}</span>
            <div className="flex items-center gap-3">
-             <span className={isMaintenanceMode ? "text-red-400" : "text-emerald-400"}>●</span>
+             <span className={`w-2 h-2 rounded-full ${isMaintenanceMode ? "bg-red-500 animate-pulse" : "bg-emerald-500"}`}></span>
              {isMaintenanceMode ? "MAINTENANCE ACTIVE" : "SYSTEM LIVE"}
            </div>
         </div>
@@ -645,37 +668,37 @@ export default function App() {
         
         {/* SIDEBAR (Config) - High Complexity Only */}
         {isHighComplexity && (
-          <div className="order-2 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/50 rounded-3xl shadow-sm flex flex-col h-auto lg:h-[calc(100vh-80px)] overflow-hidden">
-             <div className="p-5 border-b border-gray-100/50"><h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> {t('configuration')}</h2></div>
-             <div className="p-6 space-y-8">
+          <div className="order-2 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/60 rounded-[2rem] shadow-sm flex flex-col h-auto lg:h-[calc(100vh-80px)] overflow-hidden animate-in slide-in-from-left-4 duration-700">
+             <div className="p-6 border-b border-gray-100/50"><h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> {t('configuration')}</h2></div>
+             <div className="p-8 space-y-8">
                <div className="space-y-4">
                  <div className="flex justify-between text-xs font-medium text-gray-500">
                    <span>{t('temperature')}</span>
-                   <span className="text-gray-900">{params.temperature}</span>
+                   <span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span>
                  </div>
-                 <input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/>
+                 <input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/>
                </div>
                <div className="space-y-4">
                  <div className="flex justify-between text-xs font-medium text-gray-500">
                    <span>{t('topP')}</span>
-                   <span className="text-gray-900">{params.topP}</span>
+                   <span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span>
                  </div>
-                 <input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/>
+                 <input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/>
                </div>
              </div>
           </div>
         )}
 
         {/* MAIN CHAT AREA */}
-        <div className={`order-1 lg:order-2 ${isHighComplexity ? 'lg:col-span-6' : 'w-full max-w-4xl'} bg-white rounded-[2.5rem] shadow-xl shadow-gray-200/50 flex flex-col h-[80vh] lg:h-[calc(100vh-80px)] overflow-hidden border border-gray-100 relative z-10`}>
+        <div className={`order-1 lg:order-2 ${isHighComplexity ? 'lg:col-span-6' : 'w-full max-w-4xl'} bg-white rounded-[2.5rem] shadow-xl shadow-gray-200/50 flex flex-col h-[80vh] lg:h-[calc(100vh-80px)] overflow-hidden border border-gray-100 relative z-10 animate-in zoom-in-95 duration-700`}>
            {/* Header */}
-           <div className="px-6 py-4 border-b border-gray-50 bg-white/50 backdrop-blur-sm flex justify-between items-center z-20">
+           <div className="px-6 py-4 border-b border-gray-50 bg-white/80 backdrop-blur-md flex justify-between items-center z-20 sticky top-0">
              <div className="flex items-center gap-2">
-               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+               <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-200"></div>
                <span className="text-xs font-semibold text-gray-600 tracking-wide uppercase">HCM Console</span>
              </div>
              <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100">
-               <div className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-[10px] text-white font-bold">
+               <div className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-[10px] text-white font-bold shadow-sm">
                  {studentId.charAt(0)}
                </div>
                <span className="text-xs font-medium text-gray-600">{studentId}</span>
@@ -683,52 +706,46 @@ export default function App() {
            </div>
            
            {/* File Upload Zone */}
-           <div className="p-2">
+           <div className="p-3">
              <input type="file" ref={fileInputRef} className="hidden" onChange={handleFile} accept=".pdf,.csv,.xlsx,.docx"/>
              <div onClick={()=>!currentFile?fileInputRef.current.click():alert("Max files reached")} 
-                  className={`mx-4 mt-2 rounded-2xl border border-dashed transition-all duration-300 cursor-pointer flex items-center justify-center gap-3 h-14
+                  className={`mx-4 rounded-2xl border border-dashed transition-all duration-300 cursor-pointer flex items-center justify-center gap-3 h-16 group
                   ${currentFile 
                     ? 'bg-blue-50/50 border-blue-200 text-blue-700' 
-                    : 'bg-gray-50/50 border-gray-200 text-gray-400 hover:bg-gray-50 hover:border-gray-300'}`}>
+                    : 'bg-gray-50/50 border-gray-200 text-gray-400 hover:bg-white hover:border-blue-300 hover:text-blue-500 hover:shadow-md'}`}>
                 {currentFile ? (
                   <>
-                    <File size={16} className="text-blue-500"/> 
+                    <File size={18} className="text-blue-500"/> 
                     <span className="text-sm font-medium">{currentFile.name}</span>
-                    <button onClick={e=>{e.stopPropagation();setCurrentFile(null)}} className="p-1 hover:bg-blue-100 rounded-full"><X size={14}/></button>
+                    <button onClick={e=>{e.stopPropagation();setCurrentFile(null)}} className="p-1 hover:bg-blue-100 rounded-full transition-colors"><X size={14}/></button>
                   </>
                 ) : (
-                  <span className="text-xs font-medium flex items-center gap-2"><Upload size={14}/> {t('uploadDataset')}</span>
+                  <span className="text-xs font-medium flex items-center gap-2 group-hover:scale-105 transition-transform"><Upload size={16}/> {t('uploadDataset')}</span>
                 )}
              </div>
            </div>
 
            {/* Chat History */}
-           <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
+           <div className="flex-1 overflow-y-auto p-6 scroll-smooth pb-4">
              {chatHistory.length===0 && (
                <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards">
-                 <div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2">
+                 <div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner">
                    <Bot size={40} strokeWidth={1} className="text-gray-400"/>
                  </div>
                  <p className="text-sm font-medium text-gray-400">{t('readyForAnalysis')}</p>
                </div>
              )}
              {chatHistory.map((m,i)=><MessageRenderer key={i} msg={m}/>)}
-             {loading && (
-               <div className="flex gap-2 p-4 items-center text-xs text-gray-400 animate-pulse">
-                 <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
-                 <div className="w-2 h-2 bg-gray-300 rounded-full animation-delay-200"></div>
-                 <div className="w-2 h-2 bg-gray-300 rounded-full animation-delay-400"></div>
-                 {t('analyzingData')}
-               </div>
-             )}
+             {loading && <LoadingSkeleton />}
+             <div ref={bottomRef} />
            </div>
 
            {/* Input Area */}
-           <div className="p-4 bg-white border-t border-gray-50">
+           <div className="p-6 bg-white border-t border-gray-50 z-20">
              <div className="relative group">
                <input 
                  type="text" 
-                 className="w-full pl-6 pr-14 py-4 bg-gray-100 rounded-full text-[15px] focus:ring-0 focus:bg-white focus:shadow-lg focus:shadow-blue-500/5 transition-all duration-300 placeholder-gray-400 outline-none font-normal" 
+                 className="w-full pl-6 pr-16 py-4 bg-gray-100 rounded-full text-[15px] focus:ring-0 focus:bg-white focus:shadow-xl focus:shadow-blue-500/5 transition-all duration-300 placeholder-gray-400 outline-none font-normal" 
                  placeholder={t('askQuestion')}
                  value={query} 
                  onChange={e=>setQuery(e.target.value)} 
@@ -737,19 +754,21 @@ export default function App() {
                <button 
                  onClick={handleSend} 
                  disabled={loading||!query.trim()} 
-                 className="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-black text-white rounded-full hover:bg-gray-800 disabled:opacity-50 disabled:hover:bg-black transition-all shadow-md hover:shadow-lg transform active:scale-90"
+                 className="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-black text-white rounded-full hover:bg-gray-800 disabled:opacity-50 disabled:hover:bg-black transition-all shadow-md hover:shadow-lg transform active:scale-95"
                >
                  <Send size={16} fill="white" />
                </button>
              </div>
              
              {/* FOOTER DISCLAIMERS */}
-             <div className="text-center mt-3 space-y-1">
-               <div className="text-[10px] text-red-400 font-medium opacity-80 flex items-center justify-center gap-1">
+             <div className="text-center mt-4 space-y-2">
+               <div className="text-[10px] text-red-400/80 font-medium flex items-center justify-center gap-1.5 bg-red-50 py-1 px-3 rounded-full inline-flex mx-auto">
                   <Lock size={10} /> {t('confidentialDisclaimer')}
                </div>
-               <div className="text-[10px] text-gray-300 font-medium">
-                 {t('aiDisclaimer')}
+               <div className="flex items-center justify-center gap-3 text-[10px] text-gray-300 font-medium tracking-wide">
+                 <span className="flex items-center gap-1"><Eye size={10} /> {t('auditDisclaimer')}</span>
+                 <span>•</span>
+                 <span>{t('aiDisclaimer')}</span>
                </div>
              </div>
 
@@ -758,30 +777,51 @@ export default function App() {
 
         {/* SIDEBAR (Metrics) - High Complexity Only */}
         {isHighComplexity && (
-          <div className="order-3 lg:order-3 lg:col-span-3 bg-black text-gray-400 flex flex-col h-auto lg:h-[calc(100vh-80px)] rounded-3xl p-6 font-mono text-[10px] shadow-2xl shadow-gray-900/20 overflow-hidden relative">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 opacity-50"></div>
-            <div className="font-bold text-white mb-8 flex items-center gap-2 uppercase tracking-widest"><Activity size={14} className="text-blue-500"/> {t('systemMetrics')}</div>
+          <div className="order-3 lg:order-3 lg:col-span-3 bg-[#1c1c1e] text-gray-400 flex flex-col h-auto lg:h-[calc(100vh-80px)] rounded-[2rem] p-8 font-mono text-[10px] shadow-2xl shadow-gray-900/20 overflow-hidden relative animate-in slide-in-from-right-4 duration-700">
+            {/* macOS Widget Style Header */}
+            <div className="font-bold text-white mb-8 flex items-center gap-2 uppercase tracking-widest opacity-90">
+              <Activity size={14} className="text-blue-500"/> {t('systemMetrics')}
+            </div>
             
-            <div className="space-y-6">
-              <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-                <div className="text-gray-500 mb-1">{t('status')}</div>
-                <div className={`text-sm font-bold ${loading ? 'text-yellow-400 animate-pulse' : 'text-emerald-400'}`}>{loading ? t('processing') : t('operational')}</div>
+            <div className="space-y-8 relative z-10">
+              {/* Status Card */}
+              <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-sm">
+                <div className="text-gray-500 mb-2 tracking-wider">{t('status')}</div>
+                <div className={`text-xs font-bold flex items-center gap-2 ${loading ? 'text-yellow-400' : 'text-emerald-400'}`}>
+                  <span className={`w-2 h-2 rounded-full ${loading ? 'bg-yellow-400 animate-pulse' : 'bg-emerald-400'}`}></span>
+                  {loading ? t('processing') : t('operational')}
+                </div>
               </div>
 
-              <div className="space-y-2">
-                 <div className="flex justify-between"><span>{t('tokenStream')}</span><span className="text-blue-400">42/s</span></div>
-                 <div className="w-full bg-gray-900 h-16 rounded-lg flex items-end gap-[2px] p-1 overflow-hidden opacity-60">
-                    {Array.from({length: 20}).map((_,i) => (
-                      <div key={i} className="flex-1 bg-blue-500 rounded-t-[1px]" style={{height: `${Math.random()*100}%`, opacity: Math.random()}}></div>
+              {/* Token Stream Viz */}
+              <div className="space-y-3">
+                 <div className="flex justify-between text-xs">
+                   <span className="tracking-wider">{t('tokenStream')}</span>
+                   <span className="text-blue-400 font-bold">42/s</span>
+                 </div>
+                 <div className="w-full bg-black/40 h-24 rounded-xl flex items-end gap-[3px] p-2 overflow-hidden border border-white/5">
+                    {Array.from({length: 24}).map((_,i) => (
+                      <div key={i} className="flex-1 bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-[1px]" style={{height: `${20 + Math.random()*80}%`, opacity: 0.4 + Math.random()*0.6}}></div>
                     ))}
                  </div>
               </div>
 
-              <div className="space-y-2 pt-4 border-t border-gray-800">
-                 <div className="flex justify-between"><span>{t('latency')}</span><span>24ms</span></div>
-                 <div className="flex justify-between"><span>{t('uptime')}</span><span>99.9%</span></div>
+              {/* Technical Stats Table */}
+              <div className="space-y-3 pt-6 border-t border-white/10">
+                 <div className="flex justify-between items-center py-1">
+                   <span className="flex items-center gap-2"><Zap size={12} className="text-yellow-500"/> {t('latency')}</span>
+                   <span className="text-white font-mono">24ms</span>
+                 </div>
+                 <div className="flex justify-between items-center py-1">
+                   <span className="flex items-center gap-2"><Cpu size={12} className="text-purple-500"/> {t('uptime')}</span>
+                   <span className="text-white font-mono">99.9%</span>
+                 </div>
               </div>
             </div>
+            
+            {/* Background Glow */}
+            <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-[80px] pointer-events-none"></div>
+            <div className="absolute bottom-0 left-0 w-full h-32 bg-gradient-to-t from-black to-transparent pointer-events-none"></div>
           </div>
         )}
       </div>
