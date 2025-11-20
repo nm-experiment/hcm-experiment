@@ -22,8 +22,7 @@ import {
   Cpu,
   Zap,
   Eye,
-  AlertCircle,
-  FileJson
+  FileText // Changed from FileJson to safer FileText
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -357,12 +356,12 @@ export default function App() {
     if (!isLoggedIn || !db || !isAuthReady) return;
     const startSession = async () => {
       try {
-        const now = Date.now(); // Capture purely numeric timestamp
+        const now = Date.now(); 
         const sessionRef = await addDoc(collection(db, "sessions"), {
           student_id: studentId,
           condition_id: condition,
-          start_unix: now,       // <--- Critical: Primitive Number
-          last_active_unix: now, // <--- Critical: Primitive Number
+          start_unix: now,      
+          last_active_unix: now, 
           interaction_count: 0,
           date_str: new Date().toISOString().split('T')[0]
         });
@@ -379,7 +378,6 @@ export default function App() {
   useEffect(() => {
     const interval = setInterval(() => {
       if (sessionIdRef.current && db) {
-        // Update using numeric timestamp
         updateDoc(doc(db, "sessions", sessionIdRef.current), { last_active_unix: Date.now() }).catch(()=>{});
       }
     }, 60000);
@@ -414,10 +412,26 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA (ROBUST PRIMITIVE) ---
+  // --- EXPORT DATA (CLEANED & SAFE) ---
   
+  const normalizeTime = (val) => {
+    try {
+      if (!val) return 0;
+      if (typeof val === 'number') return val; 
+      if (typeof val === 'object' && val.seconds) return val.seconds * 1000; 
+      if (typeof val === 'string') {
+          const d = new Date(val);
+          return isNaN(d.getTime()) ? 0 : d.getTime();
+      }
+      return 0; 
+    } catch(e) {
+      return 0;
+    }
+  };
+
   const exportData = async () => {
     if (!db) return alert("Database not connected");
+    console.log("Starting export...");
     
     try {
       const q = query(collection(db, "sessions"));
@@ -429,36 +443,44 @@ export default function App() {
       const allDates = new Set();
       
       snapshot.forEach(docSnap => {
-        // SAFE EXTRACTION: No functions, only properties
-        const data = docSnap.data();
-        const sId = data.student_id || "Unknown";
-        const dateStr = data.date_str || "Unknown-Date";
-        
-        if (!students[sId]) {
-          students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
-        }
-        
-        // DURATION CALCULATION: Pure Math on Numbers
-        // We strictly ignore any 'Timestamp' objects to prevent crashes
-        let duration = 0;
-        const start = typeof data.start_unix === 'number' ? data.start_unix : 0;
-        const end = typeof data.last_active_unix === 'number' ? data.last_active_unix : 0;
-        
-        if (start > 0 && end > 0 && end > start) {
-           duration = Math.round((end - start) / 60000);
-        }
-        
-        const clicks = data.interaction_count || 0;
+        try {
+          const data = docSnap.data();
+          const sId = data.student_id || "Unknown";
+          
+          let dateStr = data.date_str;
+          if (!dateStr) {
+              const anyTime = data.start_unix || data.client_timestamp || data.start_time;
+              const ms = normalizeTime(anyTime);
+              if (ms > 0) dateStr = new Date(ms).toISOString().split('T')[0];
+              else dateStr = "Unknown-Date";
+          }
+          
+          if (!students[sId]) {
+            students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
+          }
+          
+          const startMs = normalizeTime(data.start_unix) || normalizeTime(data.client_timestamp) || normalizeTime(data.start_time);
+          const endMs = normalizeTime(data.last_active_unix) || normalizeTime(data.last_active);
+          
+          let duration = 0;
+          if (startMs > 0 && endMs > 0 && endMs > startMs) {
+             duration = Math.round((endMs - startMs) / 60000);
+          }
+          
+          const clicks = data.interaction_count || 0;
 
-        students[sId].total_duration += duration;
-        students[sId].total_clicks += clicks;
-        students[sId].total_sessions += 1;
-        
-        allDates.add(dateStr);
-        
-        if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
-        students[sId].dates[dateStr].duration += duration;
-        students[sId].dates[dateStr].clicks += clicks;
+          students[sId].total_duration += duration;
+          students[sId].total_clicks += clicks;
+          students[sId].total_sessions += 1;
+          
+          allDates.add(dateStr);
+          
+          if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
+          students[sId].dates[dateStr].duration += duration;
+          students[sId].dates[dateStr].clicks += clicks;
+        } catch (rowError) {
+            console.warn("Skipped malformed row:", docSnap.id);
+        }
       });
       
       const sortedDates = Array.from(allDates).sort();
@@ -470,6 +492,7 @@ export default function App() {
         const s = students[sId];
         const avg = s.total_sessions > 0 ? (s.total_duration / s.total_sessions).toFixed(1) : 0;
         let row = `${sId},${s.condition},${s.total_sessions},${s.total_duration},${s.total_clicks},${avg}`;
+        
         sortedDates.forEach(d => {
           const v = s.dates[d] || { duration: 0, clicks: 0 };
           row += `,${v.duration},${v.clicks}`;
@@ -477,11 +500,9 @@ export default function App() {
         csv += row + "\n";
       });
       
-      // Use Blob for download (Crash Proof)
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
+      const encodedUri = encodeURI(csv);
       const link = document.createElement("a");
-      link.setAttribute("href", url);
+      link.setAttribute("href", encodedUri);
       link.setAttribute("download", "hcm_data.csv");
       document.body.appendChild(link);
       link.click();
@@ -639,9 +660,12 @@ export default function App() {
             {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {t('confidence')}: {confidence}%</span>}
           </div>
           <div className="flex border-b border-gray-100">
-            {['Summary','Raw Data'].map(rawT => (
-              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
-            ))}
+            {['Summary','Raw Data'].map(rawT => {
+              const localizedT = rawT === 'Summary' ? t('summary') : t('rawData');
+              return (
+                <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
+              );
+            })}
           </div>
           <div className="p-6">
             {tab==='summary' && (
@@ -729,7 +753,7 @@ export default function App() {
                <div className="grid grid-cols-2 gap-2 animate-in fade-in">
                  <button type="button" onClick={toggleMaintenanceMode} className="text-[10px] py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-100">{isMaintenanceMode?<Lock size={10}/>:<Unlock size={10}/>}{isMaintenanceMode?t('locked'):t('unlocked')}</button>
                  <button type="button" onClick={exportData} className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-blue-100"><Download size={10}/>{t('csvExport')}</button>
-                 <button type="button" onClick={exportRawJSON} className="col-span-2 text-[10px] bg-gray-50 text-gray-600 border border-gray-200 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-gray-100"><FileJson size={10}/>{t('jsonExport')}</button>
+                 <button type="button" onClick={exportRawJSON} className="col-span-2 text-[10px] bg-gray-50 text-gray-600 border border-gray-200 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-gray-100"><FileText size={10}/>{t('jsonExport')}</button>
                </div>
              )}
           </div>
