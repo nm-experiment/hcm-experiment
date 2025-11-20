@@ -78,7 +78,7 @@ const TRANSLATIONS = {
     enterLab: "Enter Lab",
     participantId: "Participant ID",
     formatHint: "Format: Letter + 6 Digits",
-    uploadDataset: "Upload Dataset (PDF, CSV, Excel)",
+    uploadDataset: "Drag file here (Pdf, docx, pptx, xlsx)",
     askQuestion: "Ask a question...",
     readyForAnalysis: "Ready for analysis",
     analyzingData: "Analyzing data...",
@@ -110,10 +110,10 @@ const TRANSLATIONS = {
     hcmTitle: "HCM Data Lab"
   },
   de: {
-    enterLab: "Labor betreten",
+    enterLab: "Lab betreten",
     participantId: "Teilnehmer-ID",
     formatHint: "Format: Buchstabe + 6 Ziffern",
-    uploadDataset: "Datensatz hochladen (PDF, CSV, Excel)",
+    uploadDataset: "Datei hierher ziehen (Pdf, docx, pptx, xlsx)",
     askQuestion: "Stellen Sie eine Frage...",
     readyForAnalysis: "Bereit zur Analyse",
     analyzingData: "Daten werden analysiert...",
@@ -128,7 +128,7 @@ const TRANSLATIONS = {
     topP: "Top P",
     aiDisclaimer: "KI kann Fehler machen. Überprüfen Sie wichtige Informationen.",
     confidentialDisclaimer: "Bitte geben Sie keine persönlichen oder vertraulichen Informationen ein.",
-    auditDisclaimer: "Sitzungsaktivität wird aus Forschungsgründen protokolliert.",
+    auditDisclaimer: "Sitzungsaktivität wird zu Forschungszwecken protokolliert.",
     maintenanceTitle: "Bald zurück.",
     maintenanceText: "Wir führen geplante Updates am HCM Data Lab durch. Das Experiment wird in Kürze fortgesetzt.",
     researcherMode: "Forschermodus",
@@ -143,6 +143,41 @@ const TRANSLATIONS = {
     reasoning: "Begründung",
     signInTitle: "Melden Sie sich mit Ihrer Teilnehmer-ID an",
     hcmTitle: "HCM Datenlabor"
+  },
+  it: {
+    enterLab: "Entra nel Lab",
+    participantId: "ID Partecipante",
+    formatHint: "Formato: Lettera + 6 Cifre",
+    uploadDataset: "Trascina file qui (Pdf, docx, pptx, xlsx)",
+    askQuestion: "Fai una domanda...",
+    readyForAnalysis: "Pronto per l'analisi",
+    analyzingData: "Analisi dei dati in corso...",
+    status: "STATO",
+    operational: "OPERATIVO",
+    processing: "ELABORAZIONE...",
+    tokenStream: "FLUSSO TOKEN",
+    latency: "LATENZA",
+    uptime: "TEMPO DI ATTIVITÀ",
+    configuration: "Configurazione",
+    temperature: "Temperatura",
+    topP: "Top P",
+    aiDisclaimer: "L'IA può commettere errori. Verifica le informazioni importanti.",
+    confidentialDisclaimer: "Si prega di non inserire informazioni personali o riservate.",
+    auditDisclaimer: "Attività della sessione registrata per ricerca.",
+    maintenanceTitle: "Torneremo presto.",
+    maintenanceText: "Stiamo eseguendo aggiornamenti programmati al HCM Data Lab. L'esperimento riprenderà a breve.",
+    researcherMode: "Modalità Ricercatore",
+    locked: "Bloccato",
+    unlocked: "Sbloccato",
+    csvExport: "Esporta CSV",
+    systemMetrics: "Metriche di Sistema",
+    analysis: "Analisi",
+    summary: "Riepilogo",
+    rawData: "Dati Grezzi",
+    logicFlow: "Flusso Logico",
+    reasoning: "Ragionamento",
+    signInTitle: "Accedi con il tuo ID Partecipante",
+    hcmTitle: "Laboratorio Dati HCM"
   }
 };
 
@@ -183,7 +218,8 @@ try {
 const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const config = LLM_CONFIG.providers[LLM_CONFIG.activeProvider];
   
-  const languageInstruction = lang === 'de' ? "Respond in German (Deutsch)." : "Respond in English.";
+  const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
+  const languageInstruction = `Respond in ${langMap[lang] || "English"}.`;
   
   // GUARDRAIL SYSTEM PROMPT
   const systemPrompt = `
@@ -252,7 +288,7 @@ export default function App() {
   const [condition, setCondition] = useState(1);
   const [isResearcherMode, setIsResearcherMode] = useState(false);
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
-  const [lang, setLang] = useState('en'); 
+  const [lang, setLang] = useState('en'); // en, de, it
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -464,27 +500,69 @@ export default function App() {
     setLoading(false);
   };
 
-  const handleFile = (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
-    const ext = f.name.split('.').pop().toLowerCase();
+  // VALIDATES FILE SIZE AND TYPE
+  const validateAndSetFile = (file) => {
+    const ext = file.name.split('.').pop().toLowerCase();
+    
+    // Type Check
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
-       alert("File Type not Supported"); 
-       e.target.value = "";
+       alert("File Type not Supported. Allowed: PDF, DOCX, PPTX, XLSX, CSV"); 
        return;
     }
-    setCurrentFile(f);
-    logInteraction("FILE_UPLOAD", { name: f.name });
+    
+    // Size Check (Proxy for Page Limit)
+    // Limit: 500KB (~2 text-heavy pages)
+    if (file.size > 500 * 1024) { 
+      alert("File exceeds limit. Only one file with up to two pages is permitted.");
+      return;
+    }
+
+    setCurrentFile(file);
+    logInteraction("FILE_UPLOAD", { name: file.name, size: file.size });
   };
 
-  const LanguageSwitcher = () => (
-    <button 
-      onClick={() => setLang(lang === 'en' ? 'de' : 'en')}
-      className="fixed top-6 right-6 z-50 bg-white/80 backdrop-blur-md border border-gray-200 shadow-lg px-4 py-2 rounded-full flex items-center gap-2 text-sm font-medium text-gray-700 hover:bg-white hover:scale-105 transition-all duration-300"
-    >
-      {lang === 'en' ? <><span className="text-lg">🇨🇭</span><span>Deutsch</span></> : <><span className="text-lg">🇬🇧</span><span>English</span></>}
-    </button>
-  );
+  const handleFileSelect = (e) => {
+    const f = e.target.files[0];
+    if (f) validateAndSetFile(f);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      if (e.dataTransfer.files.length > 1) {
+        alert("Only one file is permitted.");
+        return;
+      }
+      validateAndSetFile(e.dataTransfer.files[0]);
+      e.dataTransfer.clearData();
+    }
+  };
+
+  const cycleLanguage = () => {
+    if (lang === 'en') setLang('de');
+    else if (lang === 'de') setLang('it');
+    else setLang('en');
+  };
+
+  const LanguageSwitcher = () => {
+    let label = "";
+    let flag = "";
+    
+    // Logic: Button shows what you SWITCH TO (next in cycle)
+    if (lang === 'en') { flag = "🇨🇭"; label = "Deutsch"; }
+    else if (lang === 'de') { flag = "🇮🇹"; label = "Italiano"; }
+    else { flag = "🇬🇧"; label = "English"; }
+
+    return (
+      <button 
+        onClick={cycleLanguage}
+        className="fixed top-6 right-6 z-50 bg-white/80 backdrop-blur-md border border-gray-200 shadow-lg px-4 py-2 rounded-full flex items-center gap-2 text-sm font-medium text-gray-700 hover:bg-white hover:scale-105 transition-all duration-300"
+      >
+        <span className="text-lg">{flag}</span>
+        <span>{label}</span>
+      </button>
+    );
+  };
 
   // --- LOADING SKELETON ---
   const LoadingSkeleton = () => (
@@ -707,9 +785,12 @@ export default function App() {
            
            {/* File Upload Zone */}
            <div className="p-3">
-             <input type="file" ref={fileInputRef} className="hidden" onChange={handleFile} accept=".pdf,.csv,.xlsx,.docx"/>
-             <div onClick={()=>!currentFile?fileInputRef.current.click():alert("Max files reached")} 
-                  className={`mx-4 rounded-2xl border border-dashed transition-all duration-300 cursor-pointer flex items-center justify-center gap-3 h-16 group
+             <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} accept=".pdf,.csv,.xlsx,.docx"/>
+             <div 
+               onClick={()=>!currentFile?fileInputRef.current.click():alert("Max files reached")} 
+               onDragOver={(e) => e.preventDefault()}
+               onDrop={handleDrop}
+               className={`mx-4 rounded-2xl border border-dashed transition-all duration-300 cursor-pointer flex items-center justify-center gap-3 h-16 group
                   ${currentFile 
                     ? 'bg-blue-50/50 border-blue-200 text-blue-700' 
                     : 'bg-gray-50/50 border-gray-200 text-gray-400 hover:bg-white hover:border-blue-300 hover:text-blue-500 hover:shadow-md'}`}>
