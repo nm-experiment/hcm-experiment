@@ -36,7 +36,6 @@ import {
   doc, 
   serverTimestamp,
   getDocs,
-  query,
   onSnapshot,
   setDoc
 } from "firebase/firestore";
@@ -378,41 +377,44 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- THE FAIL-SAFE DATA VIEW ---
+  // --- THE CAVE-MAN DATA VIEW (NO ITERATORS) ---
   const generateDataView = async () => {
     if (!db) return;
     try {
-      const q = query(collection(db, "sessions"));
-      const snapshot = await getDocs(q);
+      // DIRECT COLLECTION REF (No query builder)
+      const colRef = collection(db, "sessions");
+      const snapshot = await getDocs(colRef);
       
       // CSV HEADER
       let csv = "Session_ID,Student_ID,Condition,Date,Start_Unix,Last_Active_Unix,Duration_Mins,Clicks\n";
       
-      snapshot.forEach(docSnap => {
+      // MAP ARRAY DIRECTLY (No forEach on snapshot object)
+      const rows = snapshot.docs.map(docSnap => {
         const d = docSnap.data();
-        
-        // ROBUST EXTRACTION: No methods, just keys
         const sessId = docSnap.id;
+        
+        // Fallbacks
         const sId = d.student_id || "Unknown";
         const cond = d.condition_id || 0;
         const date = d.date_str || "Unknown";
         const clicks = d.interaction_count || 0;
         
-        // SAFE NUMBERS
+        // Safe primitive math
         const start = typeof d.start_unix === 'number' ? d.start_unix : 0;
         const end = typeof d.last_active_unix === 'number' ? d.last_active_unix : 0;
         
         let duration = 0;
         if (start > 0 && end > start) {
-           duration = Math.round((end - start) / 60000);
+           duration = Math.floor((end - start) / 60000);
         }
         
-        csv += `${sessId},${sId},${cond},${date},${start},${end},${duration},${clicks}\n`;
+        return `${sessId},${sId},${cond},${date},${start},${end},${duration},${clicks}`;
       });
       
+      csv += rows.join("\n");
       setExportDataText(csv);
     } catch(e) {
-      setExportDataText("Error generating data: " + e.message);
+      setExportDataText("Error: " + e.toString());
     }
   };
 
