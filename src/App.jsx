@@ -353,12 +353,14 @@ export default function App() {
     if (!isLoggedIn || !db || !isAuthReady) return;
     const startSession = async () => {
       try {
+        // IMPORTANT: Save primitive unix numbers (Date.now()) for reliable export
+        const now = Date.now();
         const sessionRef = await addDoc(collection(db, "sessions"), {
           student_id: studentId,
           condition_id: condition,
-          start_time: serverTimestamp(), 
-          client_timestamp: Date.now(), // Primary for calc
-          last_active: Date.now(),      // Primary for calc
+          server_start_time: serverTimestamp(), 
+          start_unix: now,       // <--- PRIMITIVE NUMBER
+          last_active_unix: now, // <--- PRIMITIVE NUMBER
           interaction_count: 0,
           date_str: new Date().toISOString().split('T')[0]
         });
@@ -374,8 +376,9 @@ export default function App() {
 
   useEffect(() => {
     const interval = setInterval(() => {
+      // Update last_active_unix (primitive number)
       if (sessionIdRef.current && db) {
-        updateDoc(doc(db, "sessions", sessionIdRef.current), { last_active: Date.now() }).catch(()=>{});
+        updateDoc(doc(db, "sessions", sessionIdRef.current), { last_active_unix: Date.now() }).catch(()=>{});
       }
     }, 60000);
     return () => clearInterval(interval);
@@ -386,12 +389,14 @@ export default function App() {
     if (!db || !sessionId) return;
     setInteractionCount(prev => prev + 1);
     try {
+      const now = Date.now();
       await addDoc(collection(db, `sessions/${sessionId}/logs`), { 
-        type, ...payload, timestamp: Date.now() 
+        type, ...payload, timestamp_unix: now 
       });
+      // Keep updating the main session doc with primitives
       updateDoc(doc(db, "sessions", sessionId), { 
         interaction_count: interactionCount + 1,
-        last_active: Date.now()
+        last_active_unix: now
       });
     } catch(e) {}
   };
@@ -408,26 +413,7 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA (CRASH PROOF - NO FUNCTIONS) ---
-  
-  // Helper: Convert ANY value to milliseconds (Number) or 0. Never throws.
-  const toMillis = (val) => {
-    try {
-      if (!val) return 0;
-      if (typeof val === 'number') return val; // Client timestamps
-      if (typeof val === 'object' && 'seconds' in val) return val.seconds * 1000; // Firestore Timestamps
-      if (val instanceof Date) return val.getTime(); // JS Dates
-      if (typeof val === 'string') {
-        const parsed = Date.parse(val);
-        return isNaN(parsed) ? 0 : parsed;
-      }
-      return 0;
-    } catch (e) {
-      console.warn("Time conversion error", e);
-      return 0;
-    }
-  };
-
+  // --- EXPORT DATA (PRIMITIVE-ONLY VERSION) ---
   const exportData = async () => {
     if (!db) return alert("Database not connected");
     console.log("Starting export...");
@@ -442,71 +428,90 @@ export default function App() {
       const allDates = new Set();
       
       snapshot.forEach(docSnap => {
-        // Isolate errors per row so one bad doc doesn't kill the export
+        // Wrap in try/catch to ensure one bad row doesn't kill the export
         try {
           const data = docSnap.data();
           const sId = data.student_id || "Unknown";
           
-          // Date Logic
+          // Date Logic: Use date_str if available, else use start_unix
           let dateStr = data.date_str;
-          if (!dateStr) {
-              const ms = toMillis(data.start_time) || toMillis(data.client_timestamp);
-              if (ms > 0) dateStr = new Date(ms).toISOString().split('T')[0];
-              else dateStr = "Unknown-Date";
+          if (!dateStr && typeof data.start_unix === 'number') {
+             dateStr = new Date(data.start_unix).toISOString().split('T')[0];
           }
-          
+          if (!dateStr) dateStr = "Unknown-Date";
+
           if (!students[sId]) {
-            students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
+            students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {}, raw_json: [] };
           }
-          
-          // Duration Logic (Primitive Math Only)
-          const startMs = toMillis(data.client_timestamp) || toMillis(data.start_time);
-          const endMs = toMillis(data.last_active);
-          
+
+          // DURATION: Only use the _unix primitive numbers. Ignore Objects.
           let duration = 0;
-          if (startMs > 0 && endMs > 0 && endMs > startMs) {
-             duration = Math.round((endMs - startMs) / 60000);
-          }
+          const start = data.start_unix;
+          const end = data.last_active_unix;
           
-          // Aggregation
+          // Simple number check
+          if (typeof start === 'number' && typeof end === 'number' && end > start) {
+             duration = Math.round((end - start) / 60000);
+          } else {
+             // Fallback for old data (try client_timestamp if it was a number)
+             if (typeof data.client_timestamp === 'number' && typeof data.last_active === 'number') {
+                duration = Math.round((data.last_active - data.client_timestamp) / 60000);
+             }
+          }
+
+          const clicks = data.interaction_count || 0;
+
           students[sId].total_duration += duration;
-          students[sId].total_clicks += (data.interaction_count || 0);
+          students[sId].total_clicks += clicks;
           students[sId].total_sessions += 1;
           
+          // Raw data dump for safety
+          students[sId].raw_json.push({ id: docSnap.id, start, end, clicks });
+
           allDates.add(dateStr);
-          
           if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
           students[sId].dates[dateStr].duration += duration;
-          students[sId].dates[dateStr].clicks += (data.interaction_count || 0);
-        } catch(rowError) {
-           console.error("Skipping bad row:", docSnap.id, rowError);
+          students[sId].dates[dateStr].clicks += clicks;
+
+        } catch (rowErr) {
+          console.warn("Skipped row due to error:", rowErr);
         }
       });
       
       const sortedDates = Array.from(allDates).sort();
+      
+      // Build Header
       let csv = "data:text/csv;charset=utf-8,Student_ID,Condition,Total_Sessions,Total_Active_Mins,Total_Clicks,Avg_Session_Mins";
       sortedDates.forEach(d => { csv += `,${d}_Mins,${d}_Clicks`; });
+      csv += ",JSON_Dump_Backup"; // Extra column for safety
       csv += "\n";
       
+      // Build Rows
       Object.keys(students).forEach(sId => {
         const s = students[sId];
         const avg = s.total_sessions > 0 ? (s.total_duration / s.total_sessions).toFixed(1) : 0;
         let row = `${sId},${s.condition},${s.total_sessions},${s.total_duration},${s.total_clicks},${avg}`;
+        
         sortedDates.forEach(d => {
           const v = s.dates[d] || { duration: 0, clicks: 0 };
           row += `,${v.duration},${v.clicks}`;
         });
+        
+        // Add raw JSON dump (escaped quotes)
+        const jsonDump = JSON.stringify(s.raw_json).replace(/"/g, '""'); 
+        row += `,"${jsonDump}"`;
+
         csv += row + "\n";
       });
       
       const link = document.createElement("a");
       link.setAttribute("href", encodeURI(csv));
-      link.setAttribute("download", "hcm_data.csv");
+      link.setAttribute("download", "hcm_data_safe.csv");
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     } catch (e) { 
-      console.error("Export Crash:", e);
+      console.error("Export Error:", e);
       alert(`Export failed: ${e.message}`); 
     }
   };
