@@ -99,7 +99,7 @@ const TRANSLATIONS = {
     researcherMode: "Researcher Mode",
     locked: "Locked",
     unlocked: "Unlocked",
-    csvExport: "Export CSV",
+    csvExport: "CSV Export",
     jsonExport: "Raw JSON",
     systemMetrics: "System Metrics",
     analysis: "Analysis",
@@ -174,7 +174,6 @@ const TRANSLATIONS = {
     locked: "Bloccato",
     unlocked: "Sbloccato",
     csvExport: "Esporta CSV",
-    jsonExport: "JSON Grezzo",
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
     summary: "Riepilogo",
@@ -412,8 +411,8 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA (FLAT & SAFE) ---
-  // This exports ONE ROW PER SESSION. No aggregation inside the app.
+  // --- EXPORT DATA (FLAT & INLINE - CRASH PROOF) ---
+  
   const exportData = async () => {
     if (!db) return alert("Database not connected");
     console.log("Starting flat export...");
@@ -428,7 +427,7 @@ export default function App() {
       let csv = "Session_ID,Student_ID,Condition,Date_Str,Start_Unix,Last_Active_Unix,Duration_Mins,Clicks\n";
       
       snapshot.forEach(docSnap => {
-        // Safe data extraction inside try/catch per row
+        // INLINE SAFE ACCESS - NO HELPER FUNCTIONS TO CRASH
         try {
           const d = docSnap.data();
           const sId = d.student_id || "Unknown";
@@ -436,7 +435,7 @@ export default function App() {
           const date = d.date_str || "Unknown";
           const clicks = d.interaction_count || 0;
           
-          // Use ONLY the _unix fields if available, default to 0
+          // Direct Property Access
           const start = typeof d.start_unix === 'number' ? d.start_unix : 0;
           const end = typeof d.last_active_unix === 'number' ? d.last_active_unix : 0;
           
@@ -445,14 +444,15 @@ export default function App() {
              duration = Math.round((end - start) / 60000);
           }
           
+          // Append Row
           csv += `${docSnap.id},${sId},${cond},${date},${start},${end},${duration},${clicks}\n`;
           
         } catch (rowError) {
-           console.warn("Skipping bad row", docSnap.id);
+           console.warn("Skipped bad row", docSnap.id);
         }
       });
       
-      // DOWNLOAD
+      // DOWNLOAD BLOB
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
