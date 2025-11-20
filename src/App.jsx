@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
 import { 
   getFirestore, 
   collection, 
@@ -50,10 +51,12 @@ const ADMIN_PASSWORD = "Ug5Bgrb9uU%@k7@pNMSFd1TdvUcyA@";
 const firebaseConfig = {
   apiKey: "AIzaSyAa_uOiuWDT2d1N06VK6L-S7B5E-kwp4-s",
   authDomain: "hcm-experiment.firebaseapp.com",
+  databaseURL: "https://hcm-experiment-default-rtdb.europe-west1.firebasedatabase.app",
   projectId: "hcm-experiment",
   storageBucket: "hcm-experiment.firebasestorage.app",
   messagingSenderId: "651308574678",
-  appId: "1:651308574678:web:25eabe58aac93a0cf82677"
+  appId: "1:651308574678:web:25eabe58aac93a0cf82677",
+  measurementId: "G-1HG6SCVNV3"
 };
 
 const LLM_CONFIG = {
@@ -204,9 +207,12 @@ const getConditionFromId = (studentId) => {
 const ALLOWED_EXTENSIONS = ['pdf', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt'];
 
 let db;
+let analytics;
+
 try {
   const app = initializeApp(firebaseConfig);
   db = getFirestore(app);
+  analytics = getAnalytics(app);
   console.log("Firebase Initialized");
 } catch (e) {
   console.error("Firebase Init Failed:", e);
