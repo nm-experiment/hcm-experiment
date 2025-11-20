@@ -259,8 +259,10 @@ export default function App() {
   
   const exportData = async () => {
     if (!db) return alert("Database not connected");
-    const password = prompt("Enter Researcher Password:");
-    if (password !== "admin123") return alert("Incorrect Password"); 
+    
+    // Double security check (though toggle is now locked too)
+    // const password = prompt("Confirm Researcher Password:");
+    // if (password !== "admin123") return alert("Incorrect Password"); 
 
     try {
       // 1. Fetch ALL sessions sorted by student for aggregation
@@ -364,6 +366,20 @@ export default function App() {
     if (!studentId.trim()) return;
     setCondition(getConditionFromId(studentId));
     setIsLoggedIn(true);
+  };
+
+  // SECURE TOGGLE HANDLER
+  const handleResearcherToggle = (e) => {
+    if (e.target.checked) {
+      const pwd = prompt("Enter Administrator Password:");
+      if (pwd === "admin123") { // CHANGE THIS PASSWORD
+        setIsResearcherMode(true);
+      } else {
+        alert("Access Denied.");
+      }
+    } else {
+      setIsResearcherMode(false);
+    }
   };
 
   const handleSend = async () => {
@@ -472,7 +488,7 @@ export default function App() {
           </div>
           <button type="submit" className="w-full bg-indigo-600 text-white p-3 rounded-lg font-semibold flex items-center justify-center gap-2"><LogIn size={18}/> Enter Lab</button>
           <div className="pt-6 border-t flex items-center gap-2">
-             <input type="checkbox" checked={isResearcherMode} onChange={e=>setIsResearcherMode(e.target.checked)} className="rounded text-indigo-600"/>
+             <input type="checkbox" checked={isResearcherMode} onChange={handleResearcherToggle} className="rounded text-indigo-600"/>
              <span className="text-xs text-gray-500">Researcher Mode</span>
              {isResearcherMode && (
                <button type="button" onClick={exportData} className="ml-auto text-xs bg-gray-200 px-2 py-1 rounded flex items-center gap-1 hover:bg-gray-300">
