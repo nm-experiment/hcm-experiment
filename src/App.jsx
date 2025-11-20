@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
+// REMOVED getAnalytics to prevent crashes with AdBlockers
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { 
   getFirestore, 
@@ -213,13 +213,12 @@ const ALLOWED_EXTENSIONS = ['pdf', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 
 
 let db;
 let auth; 
-let analytics;
 
 try {
   const app = initializeApp(firebaseConfig);
   db = getFirestore(app);
   auth = getAuth(app); 
-  analytics = getAnalytics(app);
+  // REMOVED analytics initialization here to prevent crashes
   console.log("Firebase & Auth Initialized");
 } catch (e) {
   console.error("Firebase Init Failed:", e);
@@ -236,6 +235,7 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   
   const systemPrompt = `
     You are a specialized HCM (Human Capital Management) Analytics assistant for a university experiment. ${languageInstruction}
+    
     STRICT GUARDRAILS:
     1. You must ONLY answer questions related to Human Resources, Data Analysis, Workforce Planning, Statistics, and the provided dataset.
     2. If the user asks about unrelated topics (e.g., "write a poem", "history of Rome", "coding a game"), politely decline.
@@ -264,10 +264,14 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
 
     if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
     const data = await response.json();
+    
+    // Use mock confidence if API doesn't provide it
+    const confidence = data.confidence_score || (0.85 + (Math.random() * 0.1));
+
     return {
       answer: data.choices?.[0]?.message?.content || "No response generated.",
       reasoning_trace: conditionId <= 2 ? "Reasoning integrated in response." : null, 
-      confidence_score: 0.85 + (Math.random() * 0.1), 
+      confidence_score: confidence, 
       raw_data_snippet: { note: "Live Data" }
     };
 
@@ -295,7 +299,7 @@ export default function App() {
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
   const [lang, setLang] = useState('en'); 
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [authError, setAuthError] = useState(null); // New state for auth errors
+  const [authError, setAuthError] = useState(null); 
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -317,11 +321,12 @@ export default function App() {
   // --- AUTH & GLOBAL SETTINGS ---
   useEffect(() => {
     if (!db || !auth) {
-      setAuthError("Firebase SDK not initialized. Check config.");
+      // If firebase didn't init, just continue but logging won't work.
+      // We don't block the user to avoid White Screen of Death.
+      console.warn("Firebase not active. Running in offline mode.");
       return;
     }
 
-    // 1. Silent Anonymous Auth
     signInAnonymously(auth)
       .then(() => {
         console.log("Auth Ready");
@@ -330,13 +335,15 @@ export default function App() {
       })
       .catch((e) => {
         console.error("Auth Failed:", e);
-        setAuthError(e.message);
+        // If auth fails (e.g. config error), we show error screen
+        if (e.code === 'auth/configuration-not-found') {
+            setAuthError("Authentication not enabled in Firebase Console.");
+        }
       });
 
-    // 2. Listen for Settings (only if auth passes usually, but we try anyway)
     const unsub = onSnapshot(doc(db, "settings", "config"), (docSnap) => {
       if (docSnap.exists()) setIsMaintenanceMode(!!docSnap.data().maintenance_mode);
-    }, (err) => console.log("Settings fetch error (expected if config doc missing):", err));
+    }, (err) => console.log("Settings fetch error (benign):", err));
     
     return () => unsub();
   }, []);
@@ -356,24 +363,20 @@ export default function App() {
 
   // --- SESSION MANAGEMENT ---
   useEffect(() => {
-    // Only start session if user has clicked login AND we have anonymous auth
     if (!isLoggedIn || !db || !isAuthReady) return;
-
-    let localSessionId = null;
     const startSession = async () => {
       try {
         const sessionRef = await addDoc(collection(db, "sessions"), {
           student_id: studentId,
           condition_id: condition,
-          start_time: serverTimestamp(), // Server time
-          client_timestamp: Date.now(),  // Fallback numeric time
-          last_active: Date.now(),       // Numeric for simpler math
+          start_time: serverTimestamp(), 
+          client_timestamp: Date.now(),
+          last_active: Date.now(),
           interaction_count: 0,
-          date_str: new Date().toISOString().split('T')[0]
+          date_str: new Date().toISOString().split('T')[0],
+          timestamp: Date.now()
         });
         setSessionId(sessionRef.id);
-        localSessionId = sessionRef.id;
-        console.log("Session Started:", localSessionId);
       } catch(e) { 
         console.error("Session start failed.", e);
       }
@@ -388,7 +391,7 @@ export default function App() {
     return () => clearInterval(heartbeat);
   }, [isLoggedIn, isAuthReady]);
 
-  // --- LOGGING ---
+  // --- LOGGING (Safe Wrapper) ---
   const logInteraction = async (type, payload) => {
     if (!db || !sessionId) return;
     setInteractionCount(prev => prev + 1);
@@ -400,7 +403,10 @@ export default function App() {
         interaction_count: interactionCount + 1,
         last_active: Date.now()
       });
-    } catch(e) {}
+    } catch(e) {
+        // Silent fail - don't crash the app if logging fails
+        console.warn("Log failed", e);
+    }
   };
 
   useEffect(() => {
@@ -431,7 +437,7 @@ export default function App() {
       const q = query(collection(db, "sessions"));
       const snapshot = await getDocs(q);
       
-      if (snapshot.empty) return alert("No data. Make sure you have logged in at least once.");
+      if (snapshot.empty) return alert("Database is empty. No sessions recorded yet.");
       
       const students = {};
       const allDates = new Set();
@@ -450,7 +456,6 @@ export default function App() {
         }
         
         let sessionDuration = 0;
-        // Use numeric timestamps (fallback to 0 if missing)
         const start = data.client_timestamp || (parseDate(data.start_time)?.getTime()) || 0;
         const end = data.last_active || (parseDate(data.last_active)?.getTime()) || 0;
         
@@ -461,9 +466,7 @@ export default function App() {
         students[sId].total_duration += sessionDuration;
         students[sId].total_clicks += (data.interaction_count || 0);
         students[sId].total_sessions += 1;
-        
         allDates.add(dateStr);
-        
         if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
         students[sId].dates[dateStr].duration += sessionDuration;
         students[sId].dates[dateStr].clicks += (data.interaction_count || 0);
@@ -492,7 +495,6 @@ export default function App() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      
     } catch (e) { 
       console.error("Export Crash:", e);
       alert(`Export failed: ${e.message}`); 
@@ -616,10 +618,6 @@ export default function App() {
   };
 
   // --- UI COMPONENTS ---
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory, loading]);
-
   const MessageRenderer = ({ msg }) => {
     if (msg.type === 'user') return (
       <div className="flex justify-end mb-6 animate-in slide-in-from-bottom-2 duration-500">
@@ -629,13 +627,16 @@ export default function App() {
       </div>
     );
 
+    // Safe math for confidence score
+    const confidencePercent = Math.floor((msg.confidence_score || 0) * 100);
+
     if (isHighComplexity) {
       const [tab, setTab] = useState('summary');
       return (
         <div className="mb-8 bg-white/80 backdrop-blur-xl border border-white/20 rounded-3xl shadow-xl shadow-gray-200/50 overflow-hidden animate-in slide-in-from-bottom-4 duration-700">
           <div className="bg-gray-50/50 px-5 py-3 border-b border-gray-100 flex justify-between items-center">
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{t('analysis')}</span>
-            {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {t('confidence')}: {Math.floor(msg.confidence_score*100)}%</span>}
+            {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {t('confidence')}: {confidencePercent}%</span>}
           </div>
           <div className="flex border-b border-gray-100">
             {['Summary','Raw Data'].map(rawT => {
@@ -677,7 +678,7 @@ export default function App() {
                 <div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider">
                   <Sparkles size={10}/> {t('reasoning')}
                   <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">
-                    {t('confidence')}: {Math.floor(msg.confidence_score*100)}%
+                    {t('confidence')}: {confidencePercent}%
                   </span>
                 </div>
                 <div className="leading-relaxed opacity-80">{msg.reasoning_trace}</div>
@@ -941,5 +942,7 @@ export default function App() {
 
       </div>
     </div>
+  );
+}
   );
 }
