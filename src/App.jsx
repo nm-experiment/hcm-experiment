@@ -262,7 +262,7 @@ export default function App() {
     
     // Double security check (though toggle is now locked too)
     // const password = prompt("Confirm Researcher Password:");
-    // if (password !== "admin123") return alert("Incorrect Password"); 
+    // if (password !== "Ug5Bgrb9uU%@k7@pNMSFd1TdvUcyA@") return alert("Incorrect Password"); 
 
     try {
       // 1. Fetch ALL sessions sorted by student for aggregation
