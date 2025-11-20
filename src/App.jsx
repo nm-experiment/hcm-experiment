@@ -332,7 +332,7 @@ export default function App() {
 
     const unsub = onSnapshot(doc(db, "settings", "config"), (docSnap) => {
       if (docSnap.exists()) setIsMaintenanceMode(!!docSnap.data().maintenance_mode);
-    }, () => {}); // Silent fail for settings
+    }, () => {}); 
     
     return () => unsub();
   }, []);
@@ -348,7 +348,7 @@ export default function App() {
     if (savedId) setStudentId(savedId);
   }, []);
 
-  // --- LOGGING SESSION ---
+  // --- SESSION MANAGEMENT ---
   useEffect(() => {
     if (!isLoggedIn || !db || !isAuthReady) return;
     const startSession = async () => {
@@ -368,7 +368,7 @@ export default function App() {
     startSession();
   }, [isLoggedIn, isAuthReady]);
 
-  // HEARTBEAT (Separate Effect for Stability)
+  // HEARTBEAT
   const sessionIdRef = useRef(sessionId);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
@@ -408,12 +408,25 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA (CRASH PROOF) ---
+  // --- EXPORT DATA (UPDATED: Raw Data Parsing) ---
+  const parseDate = (val) => {
+    if (!val) return null;
+    // Case 1: Firestore Timestamp Object with seconds
+    if (val.seconds !== undefined && typeof val.seconds === 'number') return new Date(val.seconds * 1000);
+    // Case 2: Standard Date object
+    if (val instanceof Date) return val;
+    // Case 3: Numeric or String timestamp
+    return new Date(val); 
+  };
+
   const exportData = async () => {
     if (!db) return alert("Database not connected");
+    console.log("Starting export...");
+    
     try {
       const q = query(collection(db, "sessions"));
       const snapshot = await getDocs(q);
+      
       if (snapshot.empty) return alert("No data found.");
       
       const students = {};
@@ -423,23 +436,25 @@ export default function App() {
         const data = docSnap.data();
         const sId = data.student_id || "Unknown";
         
-        // ROBUST DATE HANDLING
         let dateStr = data.date_str;
         if (!dateStr) {
-           // Fallback using seconds property if timestamp object
-           const ts = data.start_time?.seconds ? new Date(data.start_time.seconds * 1000) : new Date();
-           dateStr = ts.toISOString().split('T')[0];
+            const d = parseDate(data.start_time);
+            dateStr = d && !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : "Unknown";
         }
         
         if (!students[sId]) {
           students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
         
-        // Calculate Duration safely using numeric fields
         let duration = 0;
-        const start = data.client_timestamp || 0;
-        const end = data.last_active || 0;
-        if (start && end && end > start) duration = Math.round((end - start) / 60000);
+        // Use parsed values
+        const start = parseDate(data.client_timestamp || data.start_time);
+        const end = parseDate(data.last_active);
+        
+        if (start && end && !isNaN(start.getTime()) && !isNaN(end.getTime())) {
+           const ms = end.getTime() - start.getTime();
+           if (ms > 0) duration = Math.round(ms / 60000);
+        }
         
         students[sId].total_duration += duration;
         students[sId].total_clicks += (data.interaction_count || 0);
