@@ -244,9 +244,8 @@ const ID_REGEX = /^[adktADKT]\d{6}$/;
 const ALLOWED_EXTENSIONS = ['pdf', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt'];
 
 // -----------------------------------------------------------------------------
-// 2. FIREBASE INITIALIZATION
+// 2. INITIALIZATION
 // -----------------------------------------------------------------------------
-
 let db;
 let auth;
 
@@ -515,12 +514,36 @@ function AppContent() {
     setLoading(false);
   };
 
+  const validateAndSetFile = (file) => {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+       alert("File Type not Supported. Allowed: PDF, DOCX, PPTX, XLSX, CSV"); 
+       return;
+    }
+    if (file.size > 500 * 1024) { 
+      alert("File exceeds limit. Only one file with up to two pages is permitted.");
+      return;
+    }
+    setCurrentFile(file);
+    logInteraction("FILE_UPLOAD", { name: file.name, size: file.size });
+  };
+
   const handleFileSelect = (e) => {
     const f = e.target.files[0];
-    if (!f) return;
-    if (f.size > 500 * 1024) return alert("Max 500KB");
-    setCurrentFile(f);
-    logInteraction("FILE_UPLOAD", { name: f.name });
+    if (f) validateAndSetFile(f);
+  };
+
+  // ADDED HANDLE DROP FUNCTION HERE
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      if (e.dataTransfer.files.length > 1) {
+        alert("Only one file is permitted."); // Could be improved with translation
+        return;
+      }
+      validateAndSetFile(e.dataTransfer.files[0]);
+      e.dataTransfer.clearData();
+    }
   };
 
   const handleResearcherToggle = (e) => {
@@ -560,7 +583,7 @@ function AppContent() {
           </div>
           <div className="flex border-b border-gray-100">
             {['Summary','Raw Data'].map(rawT => (
-              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600 hover:bg-gray-50/50'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
+              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
             ))}
           </div>
           <div className="p-6">
@@ -580,7 +603,7 @@ function AppContent() {
       <div className="mb-8 max-w-3xl mr-auto flex gap-4 items-start animate-in slide-in-from-bottom-2">
         <div className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-500 flex-shrink-0 shadow-sm"><Brain size={18}/></div>
         <div className="space-y-2 min-w-0 flex-1">
-           <div className="bg-[#E9E9EB] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">{msg.answer}</div>
+           <div className="bg-[#F2F2F7] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">{msg.answer}</div>
            {isHighTransparency && <div className="ml-1 mt-2 p-4 bg-white/70 border border-gray-200/50 rounded-2xl text-xs text-gray-500 shadow-sm backdrop-blur-md"><div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider"><Sparkles size={10}/> {t('reasoning')}<span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">{t('confidence')}: {confidence}%</span></div><div className="leading-relaxed opacity-80">{msg.reasoning_trace}</div></div>}
         </div>
       </div>
@@ -673,7 +696,7 @@ function AppContent() {
            
            <div className="p-3">
              <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} accept=".pdf,.csv,.xlsx,.docx"/>
-             <div onClick={()=>!currentFile && fileInputRef.current.click()} onDragOver={e=>e.preventDefault()} onDrop={handleDrop} className={`mx-4 mt-2 rounded-2xl border border-dashed h-16 flex items-center justify-center gap-3 cursor-pointer transition-all duration-300 group ${currentFile?'bg-blue-50/50 border-blue-200 text-blue-700':'bg-gray-50/50 border-gray-200 text-gray-400 hover:bg-white hover:border-gray-300 hover:shadow-sm'}`}>
+             <div onClick={()=>!currentFile && fileInputRef.current.click()} onDragOver={e=>e.preventDefault()} onDrop={handleDrop} className={`mx-4 rounded-2xl border border-dashed h-16 flex items-center justify-center gap-3 cursor-pointer transition-all duration-300 group ${currentFile?'bg-blue-50/50 border-blue-200 text-blue-700':'bg-gray-50/50 border-gray-200 text-gray-400 hover:bg-white hover:border-gray-300 hover:shadow-sm'}`}>
                 {currentFile ? <span className="text-sm font-medium flex items-center gap-2"><File size={16} className="text-blue-500"/> {currentFile.name} <button onClick={e=>{e.stopPropagation();setCurrentFile(null)}} className="p-1 hover:bg-blue-100 rounded-full transition-colors"><X size={14}/></button></span> : <span className="text-xs font-medium flex items-center gap-2 group-hover:scale-105 transition-transform"><Upload size={16}/> {t('uploadDataset')}</span>}
              </div>
            </div>
