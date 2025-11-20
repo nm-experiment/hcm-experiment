@@ -22,7 +22,8 @@ import {
   Cpu,
   Zap,
   Eye,
-  FileText
+  Copy,
+  XCircle
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -33,7 +34,6 @@ import {
   addDoc, 
   updateDoc, 
   doc, 
-  serverTimestamp,
   getDocs,
   query,
   onSnapshot,
@@ -41,7 +41,7 @@ import {
 } from "firebase/firestore";
 
 // -----------------------------------------------------------------------------
-// 1. CONFIGURATION & CONSTANTS
+// 1. CONFIGURATION
 // -----------------------------------------------------------------------------
 
 const ADMIN_PASSWORD = "Ug5Bgrb9uU%@k7@pNMSFd1TdvUcyA@";
@@ -99,8 +99,7 @@ const TRANSLATIONS = {
     researcherMode: "Researcher Mode",
     locked: "Locked",
     unlocked: "Unlocked",
-    csvExport: "CSV Export",
-    jsonExport: "Raw JSON",
+    generateData: "Generate Data View",
     systemMetrics: "System Metrics",
     analysis: "Analysis",
     summary: "Summary",
@@ -136,8 +135,7 @@ const TRANSLATIONS = {
     researcherMode: "Forschermodus",
     locked: "Gesperrt",
     unlocked: "Entsperrt",
-    csvExport: "CSV Export",
-    jsonExport: "Roh-JSON",
+    generateData: "Datenansicht generieren",
     systemMetrics: "Systemmetriken",
     analysis: "Analyse",
     summary: "Zusammenfassung",
@@ -173,8 +171,7 @@ const TRANSLATIONS = {
     researcherMode: "Modalità Ricercatore",
     locked: "Bloccato",
     unlocked: "Sbloccato",
-    csvExport: "Esporta CSV",
-    jsonExport: "JSON Grezzo",
+    generateData: "Genera Vista Dati",
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
     summary: "Riepilogo",
@@ -285,7 +282,7 @@ export default function App() {
   const [lang, setLang] = useState('en'); 
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
-  const [exportDataText, setExportDataText] = useState(null);
+  const [exportDataText, setExportDataText] = useState(null); // RAW DATA DISPLAY
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -327,9 +324,10 @@ export default function App() {
     if (savedId) setStudentId(savedId);
   }, []);
 
+  // --- SESSION MANAGEMENT (SAFE TIMESTAMP) ---
   useEffect(() => {
     if (!isLoggedIn || !db || !isAuthReady) return;
-    const now = Date.now();
+    const now = Date.now(); // Always use numbers!
     const startSession = async () => {
       try {
         const ref = await addDoc(collection(db, "sessions"), {
@@ -380,16 +378,17 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- DATA EXPORT (READABLE DATE FORMAT) ---
+  // --- THE CAVE-MAN DATA VIEW (SAFE EXPORT) ---
   const generateDataView = async () => {
     if (!db) return;
     try {
       const colRef = collection(db, "sessions");
       const snapshot = await getDocs(colRef);
       
-      // CSV HEADER (Readable Dates)
-      let csv = "Session_ID,Student_ID,Condition,Date,Start_Time_ISO,End_Time_ISO,Duration_Mins,Clicks\n";
+      // CSV HEADER
+      let csv = "Session_ID,Student_ID,Condition,Date,Start_Unix,Last_Active_Unix,Duration_Mins,Clicks\n";
       
+      // MAP ARRAY DIRECTLY
       const rows = snapshot.docs.map(docSnap => {
         const d = docSnap.data();
         const sessId = docSnap.id;
@@ -399,20 +398,16 @@ export default function App() {
         const date = d.date_str || "Unknown";
         const clicks = d.interaction_count || 0;
         
-        // Extract Numbers
+        // Safe primitive math
         const start = typeof d.start_unix === 'number' ? d.start_unix : 0;
         const end = typeof d.last_active_unix === 'number' ? d.last_active_unix : 0;
-        
-        // Convert to Readable ISO Strings (Safe on primitives)
-        const startISO = start > 0 ? new Date(start).toISOString() : "N/A";
-        const endISO = end > 0 ? new Date(end).toISOString() : "N/A";
         
         let duration = 0;
         if (start > 0 && end > start) {
            duration = Math.floor((end - start) / 60000);
         }
         
-        return `${sessId},${sId},${cond},${date},${startISO},${endISO},${duration},${clicks}`;
+        return `${sessId},${sId},${cond},${date},${start},${end},${duration},${clicks}`;
       });
       
       csv += rows.join("\n");
