@@ -408,13 +408,24 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA (CRASH PROOF - PRIMITIVE FIRST) ---
+  // --- EXPORT DATA (CRASH PROOF - NO FUNCTIONS) ---
   
-  const getSafeMillis = (val) => {
-    if (!val) return 0;
-    if (typeof val === 'number') return val; // Ideally use client_timestamp
-    if (val && typeof val === 'object' && 'seconds' in val) return val.seconds * 1000; // Handle Firestore Timestamp manually
-    return 0;
+  // Helper: Convert ANY value to milliseconds (Number) or 0. Never throws.
+  const toMillis = (val) => {
+    try {
+      if (!val) return 0;
+      if (typeof val === 'number') return val; // Client timestamps
+      if (typeof val === 'object' && 'seconds' in val) return val.seconds * 1000; // Firestore Timestamps
+      if (val instanceof Date) return val.getTime(); // JS Dates
+      if (typeof val === 'string') {
+        const parsed = Date.parse(val);
+        return isNaN(parsed) ? 0 : parsed;
+      }
+      return 0;
+    } catch (e) {
+      console.warn("Time conversion error", e);
+      return 0;
+    }
   };
 
   const exportData = async () => {
@@ -431,40 +442,45 @@ export default function App() {
       const allDates = new Set();
       
       snapshot.forEach(docSnap => {
-        const data = docSnap.data();
-        const sId = data.student_id || "Unknown";
-        
-        // ROBUST DATE STRING
-        // Priority: 1. Saved date_str, 2. client_timestamp, 3. start_time.seconds
-        let dateStr = data.date_str;
-        if (!dateStr) {
-            const ms = data.client_timestamp || (data.start_time?.seconds * 1000);
-            if (ms) dateStr = new Date(ms).toISOString().split('T')[0];
-            else dateStr = "Unknown-Date";
+        // Isolate errors per row so one bad doc doesn't kill the export
+        try {
+          const data = docSnap.data();
+          const sId = data.student_id || "Unknown";
+          
+          // Date Logic
+          let dateStr = data.date_str;
+          if (!dateStr) {
+              const ms = toMillis(data.start_time) || toMillis(data.client_timestamp);
+              if (ms > 0) dateStr = new Date(ms).toISOString().split('T')[0];
+              else dateStr = "Unknown-Date";
+          }
+          
+          if (!students[sId]) {
+            students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
+          }
+          
+          // Duration Logic (Primitive Math Only)
+          const startMs = toMillis(data.client_timestamp) || toMillis(data.start_time);
+          const endMs = toMillis(data.last_active);
+          
+          let duration = 0;
+          if (startMs > 0 && endMs > 0 && endMs > startMs) {
+             duration = Math.round((endMs - startMs) / 60000);
+          }
+          
+          // Aggregation
+          students[sId].total_duration += duration;
+          students[sId].total_clicks += (data.interaction_count || 0);
+          students[sId].total_sessions += 1;
+          
+          allDates.add(dateStr);
+          
+          if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
+          students[sId].dates[dateStr].duration += duration;
+          students[sId].dates[dateStr].clicks += (data.interaction_count || 0);
+        } catch(rowError) {
+           console.error("Skipping bad row:", docSnap.id, rowError);
         }
-        
-        if (!students[sId]) {
-          students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
-        }
-        
-        // DURATION CALCULATION (No .toDate() calls)
-        const startMs = getSafeMillis(data.client_timestamp) || getSafeMillis(data.start_time);
-        const endMs = getSafeMillis(data.last_active);
-        
-        let duration = 0;
-        if (startMs > 0 && endMs > 0 && endMs > startMs) {
-           duration = Math.round((endMs - startMs) / 60000);
-        }
-        
-        students[sId].total_duration += duration;
-        students[sId].total_clicks += (data.interaction_count || 0);
-        students[sId].total_sessions += 1;
-        
-        allDates.add(dateStr);
-        
-        if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
-        students[sId].dates[dateStr].duration += duration;
-        students[sId].dates[dateStr].clicks += (data.interaction_count || 0);
       });
       
       const sortedDates = Array.from(allDates).sort();
