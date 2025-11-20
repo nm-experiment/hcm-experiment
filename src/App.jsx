@@ -408,23 +408,8 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA (CRASH PROOF v2) ---
+  // --- EXPORT DATA (PRIMITIVE FIRST) ---
   
-  const getSafeMillis = (val) => {
-    if (!val) return 0;
-    if (typeof val === 'number') return val;
-    try {
-       // Try standard JS date
-       if (val instanceof Date) return val.getTime();
-       // Try Firestore Timestamp methods if available
-       if (val.toMillis && typeof val.toMillis === 'function') return val.toMillis();
-       if (val.seconds) return val.seconds * 1000;
-    } catch(e) {
-       return 0;
-    }
-    return 0;
-  };
-
   const exportData = async () => {
     if (!db) return alert("Database not connected");
     console.log("Starting export...");
@@ -441,26 +426,38 @@ export default function App() {
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
         const sId = data.student_id || "Unknown";
-        let dateStr = data.date_str || "Unknown-Date";
+        
+        // Determine date: Try string first, then fallback to converting milliseconds
+        let dateStr = data.date_str;
+        if (!dateStr && typeof data.client_timestamp === 'number') {
+            const d = new Date(data.client_timestamp);
+            if (!isNaN(d.getTime())) dateStr = d.toISOString().split('T')[0];
+        }
+        if (!dateStr) dateStr = "Unknown-Date";
         
         if (!students[sId]) {
           students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
         
-        // Use NUMERIC timestamps only - bypassing functions that crash
-        let start = 0;
-        let end = 0;
+        // CALCULATE DURATION: STRICTLY NUMERIC
+        let startMs = 0;
+        let endMs = 0;
 
-        // Prioritize simple number fields
-        if (typeof data.client_timestamp === 'number') start = data.client_timestamp;
-        else start = getSafeMillis(data.start_time);
+        // 1. Try the raw numbers first (Most reliable)
+        if (typeof data.client_timestamp === 'number') startMs = data.client_timestamp;
+        if (typeof data.last_active === 'number') endMs = data.last_active;
 
-        if (typeof data.last_active === 'number') end = data.last_active;
-        else end = getSafeMillis(data.last_active);
+        // 2. Fallback to Firestore Timestamp .seconds (if numeric failed)
+        if (startMs === 0 && data.start_time && typeof data.start_time.seconds === 'number') {
+           startMs = data.start_time.seconds * 1000;
+        }
+        if (endMs === 0 && data.last_active && typeof data.last_active.seconds === 'number') {
+             endMs = data.last_active.seconds * 1000; // fallback if last_active was saved as timestamp
+        }
 
         let duration = 0;
-        if (start > 0 && end > 0 && end > start) {
-           duration = Math.round((end - start) / 60000);
+        if (startMs > 0 && endMs > 0 && endMs > startMs) {
+           duration = Math.round((endMs - startMs) / 60000);
         }
         
         students[sId].total_duration += duration;
