@@ -22,8 +22,7 @@ import {
   Cpu,
   Zap,
   Eye,
-  Copy,
-  XCircle
+  FileText
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -36,12 +35,13 @@ import {
   doc, 
   serverTimestamp,
   getDocs,
+  query,
   onSnapshot,
   setDoc
 } from "firebase/firestore";
 
 // -----------------------------------------------------------------------------
-// 1. CONFIGURATION
+// 1. CONFIGURATION & CONSTANTS
 // -----------------------------------------------------------------------------
 
 const ADMIN_PASSWORD = "Ug5Bgrb9uU%@k7@pNMSFd1TdvUcyA@";
@@ -99,7 +99,8 @@ const TRANSLATIONS = {
     researcherMode: "Researcher Mode",
     locked: "Locked",
     unlocked: "Unlocked",
-    generateData: "Generate Data View",
+    csvExport: "CSV Export",
+    jsonExport: "Raw JSON",
     systemMetrics: "System Metrics",
     analysis: "Analysis",
     summary: "Summary",
@@ -135,7 +136,8 @@ const TRANSLATIONS = {
     researcherMode: "Forschermodus",
     locked: "Gesperrt",
     unlocked: "Entsperrt",
-    generateData: "Datenansicht generieren",
+    csvExport: "CSV Export",
+    jsonExport: "Roh-JSON",
     systemMetrics: "Systemmetriken",
     analysis: "Analyse",
     summary: "Zusammenfassung",
@@ -171,7 +173,8 @@ const TRANSLATIONS = {
     researcherMode: "Modalità Ricercatore",
     locked: "Bloccato",
     unlocked: "Sbloccato",
-    generateData: "Genera Vista Dati",
+    csvExport: "Esporta CSV",
+    jsonExport: "JSON Grezzo",
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
     summary: "Riepilogo",
@@ -282,7 +285,7 @@ export default function App() {
   const [lang, setLang] = useState('en'); 
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
-  const [exportDataText, setExportDataText] = useState(null); // FOR RAW DATA DISPLAY
+  const [exportDataText, setExportDataText] = useState(null);
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -377,38 +380,39 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- THE CAVE-MAN DATA VIEW (NO ITERATORS) ---
+  // --- DATA EXPORT (READABLE DATE FORMAT) ---
   const generateDataView = async () => {
     if (!db) return;
     try {
-      // DIRECT COLLECTION REF (No query builder)
       const colRef = collection(db, "sessions");
       const snapshot = await getDocs(colRef);
       
-      // CSV HEADER
-      let csv = "Session_ID,Student_ID,Condition,Date,Start_Unix,Last_Active_Unix,Duration_Mins,Clicks\n";
+      // CSV HEADER (Readable Dates)
+      let csv = "Session_ID,Student_ID,Condition,Date,Start_Time_ISO,End_Time_ISO,Duration_Mins,Clicks\n";
       
-      // MAP ARRAY DIRECTLY (No forEach on snapshot object)
       const rows = snapshot.docs.map(docSnap => {
         const d = docSnap.data();
         const sessId = docSnap.id;
         
-        // Fallbacks
         const sId = d.student_id || "Unknown";
         const cond = d.condition_id || 0;
         const date = d.date_str || "Unknown";
         const clicks = d.interaction_count || 0;
         
-        // Safe primitive math
+        // Extract Numbers
         const start = typeof d.start_unix === 'number' ? d.start_unix : 0;
         const end = typeof d.last_active_unix === 'number' ? d.last_active_unix : 0;
+        
+        // Convert to Readable ISO Strings (Safe on primitives)
+        const startISO = start > 0 ? new Date(start).toISOString() : "N/A";
+        const endISO = end > 0 ? new Date(end).toISOString() : "N/A";
         
         let duration = 0;
         if (start > 0 && end > start) {
            duration = Math.floor((end - start) / 60000);
         }
         
-        return `${sessId},${sId},${cond},${date},${start},${end},${duration},${clicks}`;
+        return `${sessId},${sId},${cond},${date},${startISO},${endISO},${duration},${clicks}`;
       });
       
       csv += rows.join("\n");
