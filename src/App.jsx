@@ -19,7 +19,6 @@ import {
   Sparkles,
   Unlock,
   ChevronRight,
-  Globe,
   Cpu,
   Zap,
   Eye,
@@ -27,7 +26,6 @@ import {
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
-// REMOVED getAnalytics to prevent crashes with AdBlockers
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { 
   getFirestore, 
@@ -38,16 +36,14 @@ import {
   serverTimestamp,
   getDocs,
   query,
-  orderBy,
   onSnapshot,
   setDoc
 } from "firebase/firestore";
 
 // -----------------------------------------------------------------------------
-// 1. CONFIGURATION AREA
+// 1. CONFIGURATION & CONSTANTS
 // -----------------------------------------------------------------------------
 
-// SECURE ADMIN PASSWORD
 const ADMIN_PASSWORD = "Ug5Bgrb9uU%@k7@pNMSFd1TdvUcyA@";
 
 const firebaseConfig = {
@@ -77,7 +73,6 @@ const LLM_CONFIG = {
   }
 };
 
-// --- TRANSLATIONS ---
 const TRANSLATIONS = {
   en: {
     enterLab: "Enter Lab",
@@ -189,7 +184,6 @@ const TRANSLATIONS = {
   }
 };
 
-// Condition Mapping logic
 const CONDITIONS = {
   1: { name: "Alex", type: "Gold Standard", complexity: "LOW", transparency: "HIGH" },
   2: { name: "Danny", type: "Expert Mode", complexity: "HIGH", transparency: "HIGH" },
@@ -197,8 +191,27 @@ const CONDITIONS = {
   4: { name: "Taylor", type: "Black Box", complexity: "HIGH", transparency: "LOW" }
 };
 
-// VALIDATION LOGIC
 const ID_REGEX = /^[adktADKT]\d{6}$/;
+const ALLOWED_EXTENSIONS = ['pdf', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt'];
+
+// -----------------------------------------------------------------------------
+// 2. FIREBASE INITIALIZATION
+// -----------------------------------------------------------------------------
+
+let db;
+let auth;
+
+try {
+  const app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+  auth = getAuth(app);
+} catch (e) {
+  console.error("Firebase Init Failed:", e);
+}
+
+// -----------------------------------------------------------------------------
+// 3. HELPERS & API
+// -----------------------------------------------------------------------------
 
 const getConditionFromId = (studentId) => {
   const id = studentId.trim().toLowerCase();
@@ -208,25 +221,6 @@ const getConditionFromId = (studentId) => {
   if (id.startsWith('t')) return 4; 
   return 1; 
 };
-
-const ALLOWED_EXTENSIONS = ['pdf', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt'];
-
-let db;
-let auth; 
-
-try {
-  const app = initializeApp(firebaseConfig);
-  db = getFirestore(app);
-  auth = getAuth(app); 
-  // REMOVED analytics initialization here to prevent crashes
-  console.log("Firebase & Auth Initialized");
-} catch (e) {
-  console.error("Firebase Init Failed:", e);
-}
-
-// -----------------------------------------------------------------------------
-// 2. API HANDLER
-// -----------------------------------------------------------------------------
 
 const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const config = LLM_CONFIG.providers[LLM_CONFIG.activeProvider];
@@ -265,7 +259,6 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
     if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
     const data = await response.json();
     
-    // Use mock confidence if API doesn't provide it
     const confidence = data.confidence_score || (0.85 + (Math.random() * 0.1));
 
     return {
@@ -287,7 +280,7 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
 };
 
 // -----------------------------------------------------------------------------
-// 3. MAIN APP
+// 4. MAIN APP COMPONENT
 // -----------------------------------------------------------------------------
 
 export default function App() {
@@ -299,7 +292,7 @@ export default function App() {
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
   const [lang, setLang] = useState('en'); 
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [authError, setAuthError] = useState(null); 
+  const [authError, setAuthError] = useState(null);
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -318,15 +311,12 @@ export default function App() {
 
   const t = (key) => TRANSLATIONS[lang][key] || key;
 
-  // --- AUTH & GLOBAL SETTINGS ---
+  // --- AUTH & INIT ---
   useEffect(() => {
     if (!db || !auth) {
-      // If firebase didn't init, just continue but logging won't work.
-      // We don't block the user to avoid White Screen of Death.
-      console.warn("Firebase not active. Running in offline mode.");
+      setAuthError("Firebase SDK not initialized. Check config.");
       return;
     }
-
     signInAnonymously(auth)
       .then(() => {
         console.log("Auth Ready");
@@ -335,7 +325,6 @@ export default function App() {
       })
       .catch((e) => {
         console.error("Auth Failed:", e);
-        // If auth fails (e.g. config error), we show error screen
         if (e.code === 'auth/configuration-not-found') {
             setAuthError("Authentication not enabled in Firebase Console.");
         }
@@ -343,25 +332,23 @@ export default function App() {
 
     const unsub = onSnapshot(doc(db, "settings", "config"), (docSnap) => {
       if (docSnap.exists()) setIsMaintenanceMode(!!docSnap.data().maintenance_mode);
-    }, (err) => console.log("Settings fetch error (benign):", err));
+    }, () => {}); // Silent fail for settings
     
     return () => unsub();
   }, []);
 
-  // --- EFFECT: AUTO SCROLL TO BOTTOM ---
+  // --- SCROLLING ---
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory, loading]);
 
-  // --- AUTO-LOGIN ---
+  // --- STICKY SESSION ---
   useEffect(() => {
     const savedId = localStorage.getItem("hcm_student_id");
-    if (savedId) {
-      setStudentId(savedId);
-    }
+    if (savedId) setStudentId(savedId);
   }, []);
 
-  // --- SESSION MANAGEMENT ---
+  // --- LOGGING SESSION ---
   useEffect(() => {
     if (!isLoggedIn || !db || !isAuthReady) return;
     const startSession = async () => {
@@ -373,25 +360,34 @@ export default function App() {
           client_timestamp: Date.now(),
           last_active: Date.now(),
           interaction_count: 0,
-          date_str: new Date().toISOString().split('T')[0],
-          timestamp: Date.now()
+          date_str: new Date().toISOString().split('T')[0]
         });
         setSessionId(sessionRef.id);
-      } catch(e) { 
-        console.error("Session start failed.", e);
-      }
+      } catch(e) { console.error("Session start error:", e); }
     };
     startSession();
     const heartbeat = setInterval(async () => {
-      if (localSessionId) {
-        const ref = doc(db, "sessions", localSessionId);
-        try { await updateDoc(ref, { last_active: serverTimestamp() }); } catch(e) {}
+      if (localSessionId) { // Logic simplified, using closure scope of effect would need ref
+        // Heartbeat kept simple in this version to avoid closure issues
       }
     }, 60000);
     return () => clearInterval(heartbeat);
   }, [isLoggedIn, isAuthReady]);
 
-  // --- LOGGING (Safe Wrapper) ---
+  // Heartbeat separate effect using Ref for sessionId to avoid closure stale state
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (sessionIdRef.current && db) {
+        updateDoc(doc(db, "sessions", sessionIdRef.current), { last_active: Date.now() }).catch(()=>{});
+      }
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // --- LOGGING ACTIONS ---
   const logInteraction = async (type, payload) => {
     if (!db || !sessionId) return;
     setInteractionCount(prev => prev + 1);
@@ -403,10 +399,7 @@ export default function App() {
         interaction_count: interactionCount + 1,
         last_active: Date.now()
       });
-    } catch(e) {
-        // Silent fail - don't crash the app if logging fails
-        console.warn("Log failed", e);
-    }
+    } catch(e) {}
   };
 
   useEffect(() => {
@@ -421,23 +414,13 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- DATA EXPORT ---
-  const parseDate = (val) => {
-    if (!val) return null;
-    if (val.toDate && typeof val.toDate === 'function') return val.toDate();
-    if (val instanceof Date) return val;
-    return new Date(val); 
-  };
-
+  // --- EXPORT DATA ---
   const exportData = async () => {
     if (!db) return alert("Database not connected");
-    console.log("Starting export...");
-    
     try {
       const q = query(collection(db, "sessions"));
       const snapshot = await getDocs(q);
-      
-      if (snapshot.empty) return alert("Database is empty. No sessions recorded yet.");
+      if (snapshot.empty) return alert("No data found.");
       
       const students = {};
       const allDates = new Set();
@@ -445,60 +428,50 @@ export default function App() {
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
         const sId = data.student_id || "Unknown";
-        let dateStr = data.date_str;
-        if (!dateStr) {
-            const d = parseDate(data.start_time);
-            dateStr = d ? d.toISOString().split('T')[0] : "Unknown-Date";
-        }
+        let dateStr = data.date_str || "Unknown-Date";
         
         if (!students[sId]) {
           students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
         
-        let sessionDuration = 0;
-        const start = data.client_timestamp || (parseDate(data.start_time)?.getTime()) || 0;
-        const end = data.last_active || (parseDate(data.last_active)?.getTime()) || 0;
+        let duration = 0;
+        const start = data.client_timestamp || 0;
+        const end = data.last_active || 0;
+        if (start && end && end > start) duration = Math.round((end - start) / 60000);
         
-        if (start && end && end > start) {
-           sessionDuration = Math.round((end - start) / 60000); 
-        }
-        
-        students[sId].total_duration += sessionDuration;
+        students[sId].total_duration += duration;
         students[sId].total_clicks += (data.interaction_count || 0);
         students[sId].total_sessions += 1;
         allDates.add(dateStr);
+        
         if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
-        students[sId].dates[dateStr].duration += sessionDuration;
+        students[sId].dates[dateStr].duration += duration;
         students[sId].dates[dateStr].clicks += (data.interaction_count || 0);
       });
       
       const sortedDates = Array.from(allDates).sort();
-      let csvContent = "data:text/csv;charset=utf-8,Student_ID,Condition,Total_Sessions,Total_Active_Mins,Total_Clicks,Avg_Session_Length_Mins";
-      sortedDates.forEach(date => { csvContent += `,${date}_Mins,${date}_Clicks`; });
-      csvContent += "\n";
+      let csv = "data:text/csv;charset=utf-8,Student_ID,Condition,Total_Sessions,Total_Active_Mins,Total_Clicks,Avg_Session_Mins";
+      sortedDates.forEach(d => { csv += `,${d}_Mins,${d}_Clicks`; });
+      csv += "\n";
       
       Object.keys(students).forEach(sId => {
         const s = students[sId];
-        const avgSession = s.total_sessions > 0 ? (s.total_duration / s.total_sessions).toFixed(2) : 0;
-        let row = `${sId},${s.condition},${s.total_sessions},${s.total_duration},${s.total_clicks},${avgSession}`;
-        sortedDates.forEach(date => {
-          const dData = s.dates[date] || { duration: 0, clicks: 0 };
-          row += `,${dData.duration},${dData.clicks}`;
+        const avg = s.total_sessions > 0 ? (s.total_duration / s.total_sessions).toFixed(1) : 0;
+        let row = `${sId},${s.condition},${s.total_sessions},${s.total_duration},${s.total_clicks},${avg}`;
+        sortedDates.forEach(d => {
+          const v = s.dates[d] || { duration: 0, clicks: 0 };
+          row += `,${v.duration},${v.clicks}`;
         });
-        csvContent += row + "\n";
+        csv += row + "\n";
       });
       
-      const encodedUri = encodeURI(csvContent);
       const link = document.createElement("a");
-      link.setAttribute("href", encodedUri);
-      link.setAttribute("download", `hcm_data.csv`);
+      link.setAttribute("href", encodeURI(csv));
+      link.setAttribute("download", "hcm_data.csv");
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    } catch (e) { 
-      console.error("Export Crash:", e);
-      alert(`Export failed: ${e.message}`); 
-    }
+    } catch (e) { alert(`Export failed: ${e.message}`); }
   };
 
   // --- HANDLERS ---
@@ -524,13 +497,11 @@ export default function App() {
   };
 
   const toggleMaintenanceMode = async () => {
-    if (!db || !auth.currentUser) return alert("Not authenticated with DB.");
+    if (!db) return;
     try {
       const newState = !isMaintenanceMode;
       await setDoc(doc(db, "settings", "config"), { maintenance_mode: newState }, { merge: true });
-    } catch(e) {
-      alert(`Failed: ${e.message}`);
-    }
+    } catch(e) { alert(`Failed: ${e.message}`); }
   };
 
   const unlockMaintenance = () => {
@@ -538,9 +509,7 @@ export default function App() {
     if (pwd === ADMIN_PASSWORD) {
       setIsResearcherMode(true); 
       setIsMaintenanceMode(false); 
-    } else {
-      alert("Access Denied.");
-    }
+    } else alert("Access Denied.");
   };
 
   const handleSend = async () => {
@@ -563,34 +532,26 @@ export default function App() {
     setLoading(false);
   };
 
-  const validateAndSetFile = (file) => {
-    const ext = file.name.split('.').pop().toLowerCase();
-    if (!ALLOWED_EXTENSIONS.includes(ext)) {
-       alert("File Type not Supported. Allowed: PDF, DOCX, PPTX, XLSX, CSV"); 
-       return;
-    }
-    if (file.size > 500 * 1024) { 
-      alert("File exceeds limit. Only one file with up to two pages is permitted.");
-      return;
-    }
-    setCurrentFile(file);
-    logInteraction("FILE_UPLOAD", { name: file.name, size: file.size });
-  };
-
   const handleFileSelect = (e) => {
     const f = e.target.files[0];
-    if (f) validateAndSetFile(f);
+    if (!f) return;
+    const ext = f.name.split('.').pop().toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) return alert("File Type not Supported.");
+    if (f.size > 500 * 1024) return alert("File exceeds limit (Max 500KB/2 pages).");
+    setCurrentFile(f);
+    logInteraction("FILE_UPLOAD", { name: f.name, size: f.size });
   };
 
   const handleDrop = (e) => {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      if (e.dataTransfer.files.length > 1) {
-        alert("Only one file is permitted.");
-        return;
-      }
-      validateAndSetFile(e.dataTransfer.files[0]);
-      e.dataTransfer.clearData();
+      if (e.dataTransfer.files.length > 1) return alert("Only one file is permitted.");
+      const f = e.dataTransfer.files[0];
+      const ext = f.name.split('.').pop().toLowerCase();
+      if (!ALLOWED_EXTENSIONS.includes(ext)) return alert("File Type not Supported.");
+      if (f.size > 500 * 1024) return alert("File exceeds limit.");
+      setCurrentFile(f);
+      logInteraction("FILE_UPLOAD", { name: f.name, size: f.size });
     }
   };
 
@@ -600,51 +561,42 @@ export default function App() {
     else setLang('en');
   };
 
+  // --- UI COMPONENTS ---
   const LanguageSwitcher = () => {
-    let label = "";
-    let flag = "";
+    let label = "", flag = "";
     if (lang === 'en') { flag = "🇨🇭"; label = "Deutsch"; }
     else if (lang === 'de') { flag = "🇮🇹"; label = "Italiano"; }
     else { flag = "🇬🇧"; label = "English"; }
     return (
-      <button 
-        onClick={cycleLanguage}
-        className="fixed top-6 right-6 z-50 bg-white/80 backdrop-blur-md border border-gray-200 shadow-lg px-4 py-2 rounded-full flex items-center gap-2 text-sm font-medium text-gray-700 hover:bg-white hover:scale-105 transition-all duration-300"
-      >
-        <span className="text-lg">{flag}</span>
-        <span>{label}</span>
+      <button onClick={cycleLanguage} className="fixed top-6 right-6 z-50 bg-white/80 backdrop-blur-md border border-gray-200 shadow-lg px-4 py-2 rounded-full flex items-center gap-2 text-sm font-medium text-gray-700 hover:bg-white hover:scale-105 transition-all duration-300">
+        <span className="text-lg">{flag}</span><span>{label}</span>
       </button>
     );
   };
 
-  // --- UI COMPONENTS ---
   const MessageRenderer = ({ msg }) => {
     if (msg.type === 'user') return (
       <div className="flex justify-end mb-6 animate-in slide-in-from-bottom-2 duration-500">
-        <div className="bg-[#007AFF] text-white px-5 py-3 rounded-[1.3rem] rounded-tr-none max-w-[85%] text-[15px] shadow-md shadow-blue-500/10 leading-relaxed tracking-wide font-normal">
+        <div className="bg-[#007AFF] text-white px-5 py-3 rounded-[1.3rem] rounded-tr-none max-w-[85%] text-[15px] shadow-md leading-relaxed font-normal">
           {msg.text}
         </div>
       </div>
     );
 
-    // Safe math for confidence score
-    const confidencePercent = Math.floor((msg.confidence_score || 0) * 100);
-
+    const confidence = Math.floor((msg.confidence_score || 0) * 100);
+    
     if (isHighComplexity) {
       const [tab, setTab] = useState('summary');
       return (
-        <div className="mb-8 bg-white/80 backdrop-blur-xl border border-white/20 rounded-3xl shadow-xl shadow-gray-200/50 overflow-hidden animate-in slide-in-from-bottom-4 duration-700">
+        <div className="mb-8 bg-white/80 backdrop-blur-xl border border-white/20 rounded-3xl shadow-xl overflow-hidden animate-in slide-in-from-bottom-4">
           <div className="bg-gray-50/50 px-5 py-3 border-b border-gray-100 flex justify-between items-center">
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{t('analysis')}</span>
-            {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {t('confidence')}: {confidencePercent}%</span>}
+            {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {t('confidence')}: {confidence}%</span>}
           </div>
           <div className="flex border-b border-gray-100">
-            {['Summary','Raw Data'].map(rawT => {
-              const localizedT = rawT === 'Summary' ? t('summary') : t('rawData');
-              return (
-                <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all duration-300 ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600 hover:bg-gray-50/50'}`}>{localizedT}</button>
-              );
-            })}
+            {['Summary','Raw Data'].map(rawT => (
+              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
+            ))}
           </div>
           <div className="p-6">
             {tab==='summary' && (
@@ -653,7 +605,7 @@ export default function App() {
                 {isHighTransparency && msg.reasoning_trace && (
                   <div className="mt-6 pt-4 border-t border-gray-100">
                     <h4 className="text-[10px] font-bold text-gray-400 mb-3 flex gap-1 uppercase tracking-wider"><Terminal size={10}/> {t('logicFlow')}</h4>
-                    <div className="font-mono text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100 leading-relaxed">{msg.reasoning_trace}</div>
+                    <div className="font-mono text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100">{msg.reasoning_trace}</div>
                   </div>
                 )}
               </div>
@@ -665,21 +617,15 @@ export default function App() {
     }
 
     return (
-      <div className="mb-8 max-w-3xl mr-auto flex gap-4 items-start animate-in slide-in-from-bottom-2 duration-500">
-        <div className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-500 flex-shrink-0 shadow-sm">
-          <Brain size={18} strokeWidth={1.5}/>
-        </div>
+      <div className="mb-8 max-w-3xl mr-auto flex gap-4 items-start animate-in slide-in-from-bottom-2">
+        <div className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-500 flex-shrink-0 shadow-sm"><Brain size={18}/></div>
         <div className="space-y-2 min-w-0 flex-1">
-           <div className="bg-[#F2F2F7] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">
-             {msg.answer}
-           </div>
+           <div className="bg-[#F2F2F7] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">{msg.answer}</div>
            {isHighTransparency && msg.reasoning_trace && (
               <div className="ml-1 mt-2 p-4 bg-white/70 border border-gray-200/50 rounded-2xl text-xs text-gray-500 shadow-sm backdrop-blur-md">
                 <div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider">
                   <Sparkles size={10}/> {t('reasoning')}
-                  <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">
-                    {t('confidence')}: {confidencePercent}%
-                  </span>
+                  <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">{t('confidence')}: {confidence}%</span>
                 </div>
                 <div className="leading-relaxed opacity-80">{msg.reasoning_trace}</div>
               </div>
@@ -689,110 +635,55 @@ export default function App() {
     );
   };
 
-  // --- AUTH ERROR SCREEN ---
-  if (authError) {
-    return (
-      <div className="min-h-screen bg-red-50 flex flex-col items-center justify-center p-6 text-center">
-        <AlertCircle size={48} className="text-red-600 mb-4" />
-        <h1 className="text-2xl font-bold text-red-800 mb-2">Configuration Error</h1>
-        <p className="text-red-700 max-w-md mb-6">
-          Authentication failed: {authError}
-        </p>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-red-200 text-left text-sm space-y-2">
-          <p className="font-bold text-gray-700">Administrator Action Required:</p>
-          <ol className="list-decimal ml-5 space-y-1 text-gray-600">
-            <li>Go to <strong>Firebase Console</strong></li>
-            <li>Navigate to <strong>Build → Authentication</strong></li>
-            <li>Click <strong>Sign-in method</strong> tab</li>
-            <li>Enable <strong>Anonymous</strong> provider</li>
-          </ol>
-        </div>
-        <button onClick={() => window.location.reload()} className="mt-8 text-sm text-red-600 hover:underline">
-          Reload Page
-        </button>
-      </div>
-    );
-  }
+  // --- SCREENS ---
+  if (authError) return (
+    <div className="min-h-screen bg-red-50 flex flex-col items-center justify-center p-6 text-center">
+      <AlertCircle size={48} className="text-red-600 mb-4" />
+      <h1 className="text-2xl font-bold text-red-800 mb-2">Config Error</h1>
+      <p className="text-red-700 max-w-md mb-6">{authError}</p>
+      <div className="bg-white p-6 rounded-xl text-left text-sm"><p className="font-bold">Action:</p>Go to Firebase Console → Build → Authentication → Sign-in method → Enable Anonymous.</div>
+      <button onClick={() => window.location.reload()} className="mt-8 text-sm text-red-600 underline">Reload</button>
+    </div>
+  );
 
-  // --- MAINTENANCE SCREEN ---
-  if (isMaintenanceMode && !isResearcherMode) {
-    return (
-      <div className="min-h-screen bg-[#F5F5F7] flex flex-col items-center justify-center p-6 relative font-sans">
-        <div className="text-center max-w-md space-y-8 animate-in fade-in zoom-in duration-1000">
-          <div className="w-20 h-20 bg-white rounded-[2rem] shadow-2xl flex items-center justify-center mx-auto text-gray-900 mb-8 border border-gray-100">
-             <Sparkles size={32} className="text-gray-400" />
-          </div>
-          <h1 className="text-3xl font-semibold text-gray-900 tracking-tight">{t('maintenanceTitle')}</h1>
-          <p className="text-base text-gray-500 leading-relaxed font-light">
-            {t('maintenanceText')}
-          </p>
-        </div>
-        <div className="absolute bottom-8 right-8">
-           <button onClick={unlockMaintenance} className="text-gray-300 hover:text-gray-400 transition-colors p-2">
-             <Lock size={16} />
-           </button>
-        </div>
+  if (isMaintenanceMode && !isResearcherMode) return (
+    <div className="min-h-screen bg-[#F5F5F7] flex flex-col items-center justify-center p-6">
+      <div className="text-center max-w-md space-y-8 animate-in fade-in zoom-in">
+        <div className="w-20 h-20 bg-white rounded-[2rem] shadow-xl flex items-center justify-center mx-auto text-gray-400"><Sparkles size={32}/></div>
+        <h1 className="text-3xl font-semibold text-gray-900">{t('maintenanceTitle')}</h1>
+        <p className="text-gray-500">{t('maintenanceText')}</p>
       </div>
-    );
-  }
+      <button onClick={unlockMaintenance} className="absolute bottom-8 right-8 text-gray-300 hover:text-gray-400"><Lock size={16}/></button>
+    </div>
+  );
 
-  // --- LOGIN UI ---
   if (!isLoggedIn) return (
     <div className="min-h-screen bg-[#F5F5F7] flex items-center justify-center p-4 font-sans text-gray-900 selection:bg-blue-100">
       <LanguageSwitcher />
-      <div className="bg-white/80 backdrop-blur-2xl p-10 rounded-[2.5rem] shadow-2xl w-full max-w-[24rem] border border-white/50 animate-in fade-in zoom-in duration-500">
+      <div className="bg-white/80 backdrop-blur-2xl p-10 rounded-[2.5rem] shadow-2xl w-full max-w-[24rem] border border-white/50 animate-in fade-in zoom-in">
         <div className="text-center mb-10">
-          <div className="w-16 h-16 bg-gradient-to-br from-gray-800 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-black/20 text-white transform transition-transform hover:scale-105 duration-500">
-            <Database size={28} strokeWidth={1.5} />
-          </div>
-          <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">{t('hcmTitle')}</h1>
-          <p className="text-sm text-gray-400 mt-2 font-medium tracking-wide">{t('signInTitle')}</p>
+          <div className="w-16 h-16 bg-gradient-to-br from-gray-800 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl text-white"><Database size={28}/></div>
+          <h1 className="text-2xl font-semibold tracking-tight">{t('hcmTitle')}</h1>
+          <p className="text-sm text-gray-400 mt-2 font-medium">{t('signInTitle')}</p>
         </div>
-        
         <form onSubmit={handleLogin} className="space-y-6">
-          <div className="space-y-2">
-            <div className="relative group">
-              <User className="absolute left-4 top-3.5 text-gray-400 transition-colors group-focus-within:text-blue-600" size={18} strokeWidth={2}/>
-              <input 
-                type="text" 
-                value={studentId} 
-                onChange={e=>setStudentId(e.target.value.toUpperCase())} 
-                className={`w-full pl-12 pr-4 py-3.5 bg-gray-50/50 border ${loginError ? 'border-red-300 bg-red-50/30' : 'border-gray-200'} rounded-2xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 focus:outline-none transition-all text-gray-900 placeholder-gray-400 text-[15px] font-medium`} 
-                placeholder="e.g. A123456"
-              />
-            </div>
-            {loginError ? (
-              <div className="flex items-center gap-1.5 text-red-500 text-xs font-medium px-2 animate-in slide-in-from-top-1">
-                <AlertTriangle size={12} /> {loginError}
-              </div>
-            ) : (
-              studentId.length > 0 && <div className="text-[10px] text-gray-400 px-4 font-medium tracking-wide uppercase">{t('formatHint')}</div>
-            )}
+          <div className="relative group">
+            <User className="absolute left-4 top-3.5 text-gray-400 transition-colors group-focus-within:text-blue-600" size={18}/>
+            <input type="text" value={studentId} onChange={e=>setStudentId(e.target.value.toUpperCase())} className={`w-full pl-12 pr-4 py-3.5 bg-gray-50/50 border ${loginError?'border-red-300 bg-red-50/30':'border-gray-200'} rounded-2xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all text-gray-900 text-[15px]`} placeholder="e.g. A123456"/>
           </div>
-
-          <button type="submit" className="w-full bg-gray-900 hover:bg-black text-white py-3.5 rounded-2xl font-medium text-[15px] flex items-center justify-center gap-2 transition-all transform active:scale-[0.98] shadow-lg shadow-gray-900/20 hover:shadow-xl hover:shadow-gray-900/30">
-            <span>{t('enterLab')}</span>
-            <ChevronRight size={16} />
-          </button>
+          {loginError ? <div className="flex items-center gap-1.5 text-red-500 text-xs px-2"><AlertTriangle size={12}/>{loginError}</div> : studentId.length>0 && <div className="text-[10px] text-gray-400 px-4 uppercase">{t('formatHint')}</div>}
+          <button type="submit" className="w-full bg-gray-900 hover:bg-black text-white py-3.5 rounded-2xl font-medium text-[15px] flex items-center justify-center gap-2 transition-all transform active:scale-[0.98] shadow-lg"><span className="mt-0.5">{t('enterLab')}</span><ChevronRight size={16}/></button>
           
           <div className="pt-8 border-t border-gray-100 flex flex-col gap-4">
              <label className="flex items-center gap-3 cursor-pointer group justify-center">
-                <div className="relative">
-                  <input type="checkbox" checked={isResearcherMode} onChange={handleResearcherToggle} className="peer sr-only"/>
-                  <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-gray-900"></div>
-                </div>
+                <input type="checkbox" checked={isResearcherMode} onChange={handleResearcherToggle} className="peer sr-only"/>
+                <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-gray-900"></div>
                 <span className="text-xs text-gray-400 font-medium group-hover:text-gray-600 transition-colors">{t('researcherMode')}</span>
              </label>
-             
              {isResearcherMode && (
-               <div className="grid grid-cols-2 gap-2 animate-in fade-in slide-in-from-top-2">
-                 <button type="button" onClick={toggleMaintenanceMode} className={`text-[10px] py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 transition-colors ${isMaintenanceMode ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-gray-50 text-gray-600 border border-gray-100 hover:bg-gray-100'}`}>
-                   {isMaintenanceMode ? <Lock size={10}/> : <Unlock size={10}/>} 
-                   {isMaintenanceMode ? t('locked') : t('unlocked')}
-                 </button>
-                 <button type="button" onClick={exportData} className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-blue-100 transition-colors">
-                   <Download size={10}/> {t('csvExport')}
-                 </button>
+               <div className="grid grid-cols-2 gap-2 animate-in fade-in">
+                 <button type="button" onClick={toggleMaintenanceMode} className="text-[10px] py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-100">{isMaintenanceMode?<Lock size={10}/>:<Unlock size={10}/>}{isMaintenanceMode?t('locked'):t('unlocked')}</button>
+                 <button type="button" onClick={exportData} className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-blue-100"><Download size={10}/>{t('csvExport')}</button>
                </div>
              )}
           </div>
@@ -801,148 +692,72 @@ export default function App() {
     </div>
   );
 
-  // --- MAIN UI ---
   return (
     <div className="min-h-screen bg-[#F5F5F7] flex flex-col font-sans text-gray-900 selection:bg-blue-100">
       <LanguageSwitcher />
       {isResearcherMode && (
-        <div className="bg-gray-900 text-white/80 py-2 px-6 text-[10px] font-medium flex justify-between items-center tracking-wide backdrop-blur-md sticky top-0 z-50 shadow-lg">
+        <div className="bg-gray-900 text-white/80 py-2 px-6 text-[10px] font-medium flex justify-between items-center backdrop-blur-md sticky top-0 z-50 shadow-lg">
            <span className="flex items-center gap-2"><Terminal size={10}/> {CONDITIONS[condition].name} — {studentId}</span>
-           <div className="flex items-center gap-3">
-             <span className={`w-2 h-2 rounded-full ${isMaintenanceMode ? "bg-red-500 animate-pulse" : "bg-emerald-500"}`}></span>
-             {isMaintenanceMode ? "MAINTENANCE ACTIVE" : "SYSTEM LIVE"}
-           </div>
+           <div className="flex items-center gap-3"><span className={`w-2 h-2 rounded-full ${isMaintenanceMode?"bg-red-500 animate-pulse":"bg-emerald-500"}`}></span>{isMaintenanceMode?"MAINTENANCE":"LIVE"}</div>
         </div>
       )}
       
       <div className={`flex-1 ${isHighComplexity ? 'flex flex-col lg:grid lg:grid-cols-12 gap-6 p-6 max-w-[1600px] mx-auto w-full' : 'flex justify-center p-6'} lg:overflow-hidden`}>
-        
-        {/* SIDEBAR (Config) - High Complexity Only */}
         {isHighComplexity && (
-          <div className="order-2 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/60 rounded-[2rem] shadow-sm flex flex-col h-auto lg:h-[calc(100vh-80px)] overflow-hidden animate-in slide-in-from-left-4 duration-700">
+          <div className="order-2 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/60 rounded-[2rem] shadow-sm flex flex-col h-auto lg:h-[calc(100vh-80px)] overflow-hidden animate-in slide-in-from-left-4">
              <div className="p-6 border-b border-gray-100/50"><h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> {t('configuration')}</h2></div>
              <div className="p-8 space-y-8">
-               <div className="space-y-4">
-                 <div className="flex justify-between text-xs font-medium text-gray-500">
-                   <span>{t('temperature')}</span>
-                   <span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span>
-                 </div>
-                 <input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/>
-               </div>
-               <div className="space-y-4">
-                 <div className="flex justify-between text-xs font-medium text-gray-500">
-                   <span>{t('topP')}</span>
-                   <span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span>
-                 </div>
-                 <input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/>
-               </div>
+               <div className="space-y-4"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('temperature')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div>
+               <div className="space-y-4"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('topP')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div>
              </div>
           </div>
         )}
 
-        {/* MAIN CHAT AREA */}
-        <div className={`order-1 lg:order-2 ${isHighComplexity ? 'lg:col-span-6' : 'w-full max-w-4xl'} bg-white rounded-[2.5rem] shadow-xl shadow-gray-200/50 flex flex-col h-[80vh] lg:h-[calc(100vh-80px)] overflow-hidden border border-gray-100 relative z-10 animate-in zoom-in-95 duration-700`}>
-           {/* Header */}
+        <div className={`order-1 lg:order-2 ${isHighComplexity ? 'lg:col-span-6' : 'w-full max-w-4xl'} bg-white rounded-[2.5rem] shadow-xl shadow-gray-200/50 flex flex-col h-[80vh] lg:h-[calc(100vh-80px)] overflow-hidden border border-gray-100 relative z-10 animate-in zoom-in-95`}>
            <div className="px-6 py-4 border-b border-gray-50 bg-white/80 backdrop-blur-md flex justify-between items-center z-20 sticky top-0">
-             <div className="flex items-center gap-2">
-               <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-200"></div>
-               <span className="text-xs font-semibold text-gray-600 tracking-wide uppercase">HCM Console</span>
-             </div>
-             <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100">
-               <div className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-[10px] text-white font-bold shadow-sm">
-                 {studentId.charAt(0)}
-               </div>
-               <span className="text-xs font-medium text-gray-600">{studentId}</span>
-             </div>
+             <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-200"></div><span className="text-xs font-semibold text-gray-600 tracking-wide uppercase">HCM Console</span></div>
+             <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100"><div className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-[10px] text-white font-bold shadow-sm">{studentId.charAt(0)}</div><span className="text-xs font-medium text-gray-600">{studentId}</span></div>
            </div>
            
-           {/* File Upload Zone */}
            <div className="p-3">
              <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} accept=".pdf,.csv,.xlsx,.docx"/>
-             <div 
-               onClick={()=>!currentFile?fileInputRef.current.click():alert("Max files reached (1)")} 
-               onDragOver={(e) => e.preventDefault()}
-               onDrop={handleDrop}
-               className={`mx-4 rounded-2xl border border-dashed transition-all duration-300 cursor-pointer flex items-center justify-center gap-3 h-16 group
-                  ${currentFile 
-                    ? 'bg-blue-50/50 border-blue-200 text-blue-700' 
-                    : 'bg-gray-50/50 border-gray-200 text-gray-400 hover:bg-white hover:border-blue-300 hover:text-blue-500 hover:shadow-md'}`}>
-                {currentFile ? (
-                  <>
-                    <File size={18} className="text-blue-500"/> 
-                    <span className="text-sm font-medium">{currentFile.name}</span>
-                    <button onClick={e=>{e.stopPropagation();setCurrentFile(null)}} className="p-1 hover:bg-blue-100 rounded-full transition-colors"><X size={14}/></button>
-                  </>
-                ) : (
-                  <span className="text-xs font-medium flex items-center gap-2 group-hover:scale-105 transition-transform"><Upload size={16}/> {t('uploadDataset')}</span>
-                )}
+             <div onClick={()=>!currentFile?fileInputRef.current.click():alert("Max files reached")} onDragOver={e=>e.preventDefault()} onDrop={handleDrop} className={`mx-4 rounded-2xl border border-dashed transition-all duration-300 cursor-pointer flex items-center justify-center gap-3 h-16 group ${currentFile?'bg-blue-50/50 border-blue-200 text-blue-700':'bg-gray-50/50 border-gray-200 text-gray-400 hover:bg-white hover:border-blue-300 hover:text-blue-500 hover:shadow-md'}`}>
+                {currentFile ? <><File size={18} className="text-blue-500"/><span className="text-sm font-medium">{currentFile.name}</span><button onClick={e=>{e.stopPropagation();setCurrentFile(null)}} className="p-1 hover:bg-blue-100 rounded-full"><X size={14}/></button></> : <span className="text-xs font-medium flex items-center gap-2 group-hover:scale-105 transition-transform"><Upload size={16}/> {t('uploadDataset')}</span>}
              </div>
            </div>
 
-           {/* Chat History */}
            <div className="flex-1 overflow-y-auto p-6 scroll-smooth pb-4">
-             {chatHistory.length === 0 && (
-               <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards">
-                 <div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner">
-                   <Bot size={40} strokeWidth={1} className="text-gray-400"/>
-                 </div>
-                 <p className="text-sm font-medium text-gray-400">{t('readyForAnalysis')}</p>
-               </div>
-             )}
-             {chatHistory.map((msg, i) => <MessageRenderer key={i} msg={msg} />)}
-             {loading && <LoadingSkeleton />}
+             {chatHistory.length===0 && <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards"><div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner"><Bot size={40} strokeWidth={1} className="text-gray-400"/></div><p className="text-sm font-medium text-gray-400">{t('readyForAnalysis')}</p></div>}
+             {chatHistory.map((m,i)=><MessageRenderer key={i} msg={m}/>)}
+             {loading && <div className="max-w-3xl mr-auto flex gap-4 items-start animate-pulse"><div className="w-8 h-8 rounded-full bg-gray-200"></div><div className="flex-1 space-y-2"><div className="h-4 bg-gray-200 rounded-md w-3/4"></div><div className="h-4 bg-gray-200 rounded-md w-1/2"></div></div></div>}
              <div ref={bottomRef} />
            </div>
 
-           {/* Input Area */}
            <div className="p-6 bg-white border-t border-gray-50 z-20">
              <div className="relative group">
-               <input 
-                 type="text" 
-                 className="w-full pl-6 pr-16 py-4 bg-gray-100 rounded-full text-[15px] focus:ring-0 focus:bg-white focus:shadow-xl focus:shadow-blue-500/5 transition-all duration-300 placeholder-gray-400 outline-none font-normal" 
-                 placeholder={t('askQuestion')}
-                 value={query} 
-                 onChange={e=>setQuery(e.target.value)} 
-                 onKeyDown={e=>e.key==='Enter'&&handleSend()}
-               />
-               <button 
-                 onClick={handleSend} 
-                 disabled={loading||!query.trim()} 
-                 className="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-black text-white rounded-full hover:bg-gray-800 disabled:opacity-50 disabled:hover:bg-black transition-all shadow-md hover:shadow-lg transform active:scale-95"
-               >
-                 <Send size={16} fill="white" />
-               </button>
+               <input type="text" className="w-full pl-6 pr-16 py-4 bg-gray-100 rounded-full text-[15px] focus:ring-0 focus:bg-white focus:shadow-xl focus:shadow-blue-500/5 transition-all duration-300 placeholder-gray-400 outline-none font-normal" placeholder={t('askQuestion')} value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSend()}/>
+               <button onClick={handleSend} disabled={loading||!query.trim()} className="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-black text-white rounded-full hover:bg-gray-800 disabled:opacity-50 disabled:hover:bg-black transition-all shadow-md hover:shadow-lg transform active:scale-95"><Send size={16} fill="white"/></button>
              </div>
-             
-             {/* FOOTER DISCLAIMERS */}
              <div className="text-center mt-4 space-y-2">
-               <div className="text-[10px] text-red-400/80 font-medium flex items-center justify-center gap-1.5 bg-red-50 py-1 px-3 rounded-full inline-flex mx-auto">
-                  <Lock size={10} /> {t('confidentialDisclaimer')}
-               </div>
-               <div className="flex items-center justify-center gap-3 text-[10px] text-gray-300 font-medium tracking-wide">
-                 <span className="flex items-center gap-1"><Eye size={10} /> {t('auditDisclaimer')}</span>
-                 <span>•</span>
-                 <span>{t('aiDisclaimer')}</span>
-               </div>
+               <div className="text-[10px] text-red-400/80 font-medium flex items-center justify-center gap-1.5 bg-red-50 py-1 px-3 rounded-full inline-flex mx-auto"><Lock size={10}/> {t('confidentialDisclaimer')}</div>
+               <div className="flex items-center justify-center gap-3 text-[10px] text-gray-300 font-medium tracking-wide"><span className="flex items-center gap-1"><Eye size={10}/> {t('auditDisclaimer')}</span><span>•</span><span>{t('aiDisclaimer')}</span></div>
              </div>
-
            </div>
         </div>
 
-        {/* Sidebar (Metrics) - High Complexity Only */}
         {isHighComplexity && (
-          <div className="order-3 lg:order-3 w-full lg:col-span-3 bg-black text-gray-300 flex flex-col h-auto lg:h-[calc(100vh-40px)] font-mono text-xs p-4">
-            <div className="font-bold text-green-500 mb-4 flex items-center gap-2"><Activity size={16}/> System Metrics</div>
-            <div>Status: {loading ? "Processing" : "Idle"}</div>
-            {/* Visual filler for complexity */}
-            <div className="mt-8 text-gray-500">Token Stream...</div>
-            <div className="flex gap-1 h-10 mt-2 items-end opacity-50">{[30,50,20,60,40,80].map((h,i)=><div key={i} className="flex-1 bg-gray-700" style={{height:`${h}%`}}></div>)}</div>
+          <div className="order-3 lg:order-3 lg:col-span-3 bg-[#1c1c1e] text-gray-400 flex flex-col h-auto lg:h-[calc(100vh-80px)] rounded-[2rem] p-8 font-mono text-[10px] shadow-2xl shadow-gray-900/20 overflow-hidden relative animate-in slide-in-from-right-4">
+            <div className="font-bold text-white mb-8 flex items-center gap-2 uppercase tracking-widest opacity-90"><Activity size={14} className="text-blue-500"/> {t('systemMetrics')}</div>
+            <div className="space-y-8 relative z-10">
+              <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-sm"><div className="text-gray-500 mb-2 tracking-wider">{t('status')}</div><div className={`text-xs font-bold flex items-center gap-2 ${loading?'text-yellow-400':'text-emerald-400'}`}><span className={`w-2 h-2 rounded-full ${loading?'bg-yellow-400 animate-pulse':'bg-emerald-400'}`}></span>{loading?t('processing'):t('operational')}</div></div>
+              <div className="space-y-3"><div className="flex justify-between text-xs"><span className="tracking-wider">{t('tokenStream')}</span><span className="text-blue-400 font-bold">42/s</span></div><div className="w-full bg-black/40 h-24 rounded-xl flex items-end gap-[3px] p-2 overflow-hidden border border-white/5">{Array.from({length: 24}).map((_,i)=><div key={i} className="flex-1 bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-[1px]" style={{height: `${20+Math.random()*80}%`, opacity: 0.4+Math.random()*0.6}}></div>)}</div></div>
+              <div className="space-y-3 pt-6 border-t border-white/10"><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Zap size={12} className="text-yellow-500"/> {t('latency')}</span><span className="text-white font-mono">24ms</span></div><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Cpu size={12} className="text-purple-500"/> {t('uptime')}</span><span className="text-white font-mono">99.9%</span></div></div>
+            </div>
+            <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-[80px] pointer-events-none"></div>
+            <div className="absolute bottom-0 left-0 w-full h-32 bg-gradient-to-t from-black to-transparent pointer-events-none"></div>
           </div>
         )}
-
       </div>
     </div>
-  );
-}
   );
 }
