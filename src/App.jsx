@@ -140,7 +140,7 @@ const TRANSLATIONS = {
     researcherMode: "Researcher Mode",
     locked: "Locked",
     unlocked: "Unlocked",
-    csvExport: "Generate Data View",
+    csvExport: "Export CSV",
     jsonExport: "Raw JSON",
     systemMetrics: "System Metrics",
     analysis: "Analysis",
@@ -179,7 +179,7 @@ const TRANSLATIONS = {
     researcherMode: "Forschermodus",
     locked: "Gesperrt",
     unlocked: "Entsperrt",
-    csvExport: "Datenansicht generieren",
+    csvExport: "CSV Export",
     jsonExport: "Roh-JSON",
     systemMetrics: "Systemmetriken",
     analysis: "Analyse",
@@ -218,7 +218,7 @@ const TRANSLATIONS = {
     researcherMode: "Modalità Ricercatore",
     locked: "Bloccato",
     unlocked: "Sbloccato",
-    csvExport: "Genera Vista Dati",
+    csvExport: "Esporta CSV",
     jsonExport: "JSON Grezzo",
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
@@ -274,6 +274,7 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
   const instruction = `Respond in ${langMap[lang] || "English"}.`;
   
+  // REVISED GUARDRAIL: IMMEDIATE SHUTDOWN
   const systemPrompt = `
     You are a specialized Human Capital Management (HCM) & HR Analytics assistant. ${instruction}
     
@@ -281,10 +282,12 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
     - You help with HR Marketing, Workforce Planning, Employee Retention, and Data Analysis.
     - You calculate metrics and explain HR concepts based on provided data.
     
-    STRICT GUARDRAILS:
-    1. If the user asks about topics unrelated to Human Resources or Data Analysis (e.g., "write a poem", "history of Rome", "coding a game"), politely decline.
-    2. Say: "I am designed to assist with Human Capital and HR related questions only."
-    3. Do NOT mention that you are part of an experiment or study.
+    CRITICAL INSTRUCTION - OFF-TOPIC REQUESTS:
+    If the user asks about ANY topic NOT related to Human Resources, Data Analysis, or Workforce Planning (e.g., "write a poem", "history of Rome", "coding a game"), you must REFUSE IMMEDIATELY.
+    
+    Do NOT provide any information about the off-topic subject.
+    Do NOT be chatty.
+    Your ONLY response to off-topic queries must be: "I am designed to assist with Human Capital and HR related questions only."
 
     Condition Settings:
     ${conditionId === 3 || conditionId === 4 ? "Direct answer only. No reasoning." : "Explain reasoning clearly."}
@@ -437,39 +440,21 @@ function AppContent() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- DATA EXPORT (TEXT DUMP - CRASH PROOF) ---
+  // --- DATA EXPORT ---
   const generateDataView = async () => {
     if (!db) return;
     try {
       const colRef = collection(db, "sessions");
       const snapshot = await getDocs(colRef);
-      // HEADER WITH READABLE DATES
-      let csv = "Session_ID,Student_ID,Condition,Date,Start_Time,End_Time,Duration_Mins,Clicks\n";
-      
+      let csv = "Session_ID,Student_ID,Condition,Date,Start_Unix,Last_Active_Unix,Duration_Mins,Clicks\n";
       const rows = snapshot.docs.map(docSnap => {
         const d = docSnap.data();
-        const sessId = docSnap.id;
-        
-        const sId = d.student_id || "Unknown";
-        const cond = d.condition_id || 0;
-        const date = d.date_str || "Unknown";
-        const clicks = d.interaction_count || 0;
-        
         const start = typeof d.start_unix === 'number' ? d.start_unix : 0;
         const end = typeof d.last_active_unix === 'number' ? d.last_active_unix : 0;
-        
         let duration = 0;
-        if (start > 0 && end > start) {
-           duration = Math.floor((end - start) / 60000);
-        }
-        
-        // CONVERT TO READABLE ISO STRINGS for CSV
-        const startISO = start > 0 ? new Date(start).toISOString() : "N/A";
-        const endISO = end > 0 ? new Date(end).toISOString() : "N/A";
-        
-        return `${sessId},${sId},${cond},${date},${startISO},${endISO},${duration},${clicks}`;
+        if (start > 0 && end > start) duration = Math.floor((end - start) / 60000);
+        return `${docSnap.id},${d.student_id||"?"},${d.condition_id||0},${d.date_str||"?"},${start},${end},${duration},${d.interaction_count||0}`;
       });
-      
       csv += rows.join("\n");
       setExportDataText(csv);
     } catch(e) {
@@ -533,12 +518,11 @@ function AppContent() {
     if (f) validateAndSetFile(f);
   };
 
-  // ADDED HANDLE DROP FUNCTION HERE
   const handleDrop = (e) => {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       if (e.dataTransfer.files.length > 1) {
-        alert("Only one file is permitted."); // Could be improved with translation
+        alert("Only one file is permitted.");
         return;
       }
       validateAndSetFile(e.dataTransfer.files[0]);
@@ -583,7 +567,7 @@ function AppContent() {
           </div>
           <div className="flex border-b border-gray-100">
             {['Summary','Raw Data'].map(rawT => (
-              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
+              <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2.5 text-xs font-medium transition-all ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600 hover:bg-gray-50/50'}`}>{rawT === 'Summary' ? t('summary') : t('rawData')}</button>
             ))}
           </div>
           <div className="p-6">
@@ -626,7 +610,7 @@ function AppContent() {
       <LanguageSwitcher />
       <div className="bg-white/80 backdrop-blur-2xl p-10 rounded-[2.5rem] shadow-2xl w-full max-w-[24rem] border border-white/60 animate-in fade-in zoom-in duration-500">
         <div className="text-center mb-10">
-          <div className="w-16 h-16 bg-gradient-to-br from-gray-900 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-black/10 text-white"><Database size={28} strokeWidth={1.5}/></div>
+          <div className="w-16 h-16 bg-gradient-to-br from-gray-900 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl text-white"><Database size={28} strokeWidth={1.5}/></div>
           <h1 className="text-2xl font-semibold tracking-tight text-gray-900">{t('hcmTitle')}</h1>
           <p className="text-sm text-gray-400 mt-2 font-medium tracking-wide">{t('signInTitle')}</p>
         </div>
