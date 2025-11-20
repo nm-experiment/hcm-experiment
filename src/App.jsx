@@ -22,7 +22,8 @@ import {
   Globe,
   Cpu,
   Zap,
-  Eye
+  Eye,
+  AlertCircle
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -294,6 +295,7 @@ export default function App() {
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
   const [lang, setLang] = useState('en'); 
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [authError, setAuthError] = useState(null); // New state for auth errors
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -314,23 +316,50 @@ export default function App() {
 
   // --- AUTH & GLOBAL SETTINGS ---
   useEffect(() => {
-    if (!db || !auth) return;
+    if (!db || !auth) {
+      setAuthError("Firebase SDK not initialized. Check config.");
+      return;
+    }
+
+    // 1. Silent Anonymous Auth
     signInAnonymously(auth)
       .then(() => {
         console.log("Auth Ready");
         setIsAuthReady(true);
+        setAuthError(null);
       })
-      .catch((e) => console.error("Auth Failed:", e));
+      .catch((e) => {
+        console.error("Auth Failed:", e);
+        setAuthError(e.message);
+      });
 
+    // 2. Listen for Settings (only if auth passes usually, but we try anyway)
     const unsub = onSnapshot(doc(db, "settings", "config"), (docSnap) => {
       if (docSnap.exists()) setIsMaintenanceMode(!!docSnap.data().maintenance_mode);
     }, (err) => console.log("Settings fetch error (expected if config doc missing):", err));
+    
     return () => unsub();
+  }, []);
+
+  // --- EFFECT: AUTO SCROLL TO BOTTOM ---
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory, loading]);
+
+  // --- AUTO-LOGIN ---
+  useEffect(() => {
+    const savedId = localStorage.getItem("hcm_student_id");
+    if (savedId) {
+      setStudentId(savedId);
+    }
   }, []);
 
   // --- SESSION MANAGEMENT ---
   useEffect(() => {
+    // Only start session if user has clicked login AND we have anonymous auth
     if (!isLoggedIn || !db || !isAuthReady) return;
+
+    let localSessionId = null;
     const startSession = async () => {
       try {
         const sessionRef = await addDoc(collection(db, "sessions"), {
@@ -343,19 +372,21 @@ export default function App() {
           date_str: new Date().toISOString().split('T')[0]
         });
         setSessionId(sessionRef.id);
-      } catch(e) { console.error("Session Creation Failed:", e); }
+        localSessionId = sessionRef.id;
+        console.log("Session Started:", localSessionId);
+      } catch(e) { 
+        console.error("Session start failed.", e);
+      }
     };
     startSession();
-  }, [isLoggedIn, isAuthReady]);
-
-  // --- HEARTBEAT (Updates Duration) ---
-  useEffect(() => {
-    if (!sessionId) return;
-    const interval = setInterval(() => {
-      updateDoc(doc(db, "sessions", sessionId), { last_active: Date.now() }).catch(()=>{});
+    const heartbeat = setInterval(async () => {
+      if (localSessionId) {
+        const ref = doc(db, "sessions", localSessionId);
+        try { await updateDoc(ref, { last_active: serverTimestamp() }); } catch(e) {}
+      }
     }, 60000);
-    return () => clearInterval(interval);
-  }, [sessionId]);
+    return () => clearInterval(heartbeat);
+  }, [isLoggedIn, isAuthReady]);
 
   // --- LOGGING ---
   const logInteraction = async (type, payload) => {
@@ -372,7 +403,6 @@ export default function App() {
     } catch(e) {}
   };
 
-  // --- REACTION TIMER ---
   useEffect(() => {
     if (!lastResponseTimestamp) return;
     const handleInteraction = (e) => {
@@ -385,9 +415,17 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- DATA EXPORT (CRASH PROOFED) ---
+  // --- DATA EXPORT ---
+  const parseDate = (val) => {
+    if (!val) return null;
+    if (val.toDate && typeof val.toDate === 'function') return val.toDate();
+    if (val instanceof Date) return val;
+    return new Date(val); 
+  };
+
   const exportData = async () => {
     if (!db) return alert("Database not connected");
+    console.log("Starting export...");
     
     try {
       const q = query(collection(db, "sessions"));
@@ -401,29 +439,34 @@ export default function App() {
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
         const sId = data.student_id || "Unknown";
-        const date = data.date_str || "Unknown-Date";
+        let dateStr = data.date_str;
+        if (!dateStr) {
+            const d = parseDate(data.start_time);
+            dateStr = d ? d.toISOString().split('T')[0] : "Unknown-Date";
+        }
         
         if (!students[sId]) {
           students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
         
+        let sessionDuration = 0;
         // Use numeric timestamps (fallback to 0 if missing)
-        const start = data.client_timestamp || 0;
-        const end = data.last_active || 0;
-        let duration = 0;
+        const start = data.client_timestamp || (parseDate(data.start_time)?.getTime()) || 0;
+        const end = data.last_active || (parseDate(data.last_active)?.getTime()) || 0;
         
         if (start && end && end > start) {
-           duration = Math.round((end - start) / 60000); 
+           sessionDuration = Math.round((end - start) / 60000); 
         }
         
-        students[sId].total_duration += duration;
+        students[sId].total_duration += sessionDuration;
         students[sId].total_clicks += (data.interaction_count || 0);
         students[sId].total_sessions += 1;
         
-        allDates.add(date);
-        if (!students[sId].dates[date]) students[sId].dates[date] = { duration: 0, clicks: 0 };
-        students[sId].dates[date].duration += duration;
-        students[sId].dates[date].clicks += (data.interaction_count || 0);
+        allDates.add(dateStr);
+        
+        if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
+        students[sId].dates[dateStr].duration += sessionDuration;
+        students[sId].dates[dateStr].clicks += (data.interaction_count || 0);
       });
       
       const sortedDates = Array.from(allDates).sort();
@@ -451,8 +494,8 @@ export default function App() {
       document.body.removeChild(link);
       
     } catch (e) { 
-      console.error("Export Error:", e);
-      alert("Export failed. See console for details."); 
+      console.error("Export Crash:", e);
+      alert(`Export failed: ${e.message}`); 
     }
   };
 
@@ -631,7 +674,7 @@ export default function App() {
            </div>
            {isHighTransparency && msg.reasoning_trace && (
               <div className="ml-1 mt-2 p-4 bg-white/70 border border-gray-200/50 rounded-2xl text-xs text-gray-500 shadow-sm backdrop-blur-md">
-                <div className="flex items-center gap-1.5 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider">
+                <div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider">
                   <Sparkles size={10}/> {t('reasoning')}
                   <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">
                     {t('confidence')}: {Math.floor(msg.confidence_score*100)}%
@@ -644,6 +687,31 @@ export default function App() {
       </div>
     );
   };
+
+  // --- AUTH ERROR SCREEN ---
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-red-50 flex flex-col items-center justify-center p-6 text-center">
+        <AlertCircle size={48} className="text-red-600 mb-4" />
+        <h1 className="text-2xl font-bold text-red-800 mb-2">Configuration Error</h1>
+        <p className="text-red-700 max-w-md mb-6">
+          Authentication failed: {authError}
+        </p>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-red-200 text-left text-sm space-y-2">
+          <p className="font-bold text-gray-700">Administrator Action Required:</p>
+          <ol className="list-decimal ml-5 space-y-1 text-gray-600">
+            <li>Go to <strong>Firebase Console</strong></li>
+            <li>Navigate to <strong>Build → Authentication</strong></li>
+            <li>Click <strong>Sign-in method</strong> tab</li>
+            <li>Enable <strong>Anonymous</strong> provider</li>
+          </ol>
+        </div>
+        <button onClick={() => window.location.reload()} className="mt-8 text-sm text-red-600 hover:underline">
+          Reload Page
+        </button>
+      </div>
+    );
+  }
 
   // --- MAINTENANCE SCREEN ---
   if (isMaintenanceMode && !isResearcherMode) {
