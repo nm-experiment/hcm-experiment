@@ -19,7 +19,7 @@ import {
   Sparkles,
   Unlock,
   ChevronRight,
-  Command
+  Globe
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -66,6 +66,78 @@ const LLM_CONFIG = {
   }
 };
 
+// --- TRANSLATIONS ---
+const TRANSLATIONS = {
+  en: {
+    enterLab: "Enter Lab",
+    participantId: "Participant ID",
+    formatHint: "Format: Letter + 6 Digits",
+    uploadDataset: "Upload Dataset (PDF, CSV, Excel)",
+    askQuestion: "Ask a question...",
+    readyForAnalysis: "Ready for analysis",
+    analyzingData: "Analyzing data...",
+    status: "STATUS",
+    operational: "OPERATIONAL",
+    processing: "PROCESSING...",
+    tokenStream: "TOKEN STREAM",
+    latency: "LATENCY",
+    uptime: "UPTIME",
+    configuration: "Configuration",
+    temperature: "Temperature",
+    topP: "Top P",
+    aiDisclaimer: "AI can make mistakes. Verify important information.",
+    confidentialDisclaimer: "Please do not enter personal or confidential information.",
+    maintenanceTitle: "Be back soon.",
+    maintenanceText: "We are performing scheduled updates to the HCM Data Lab. The experiment will resume shortly.",
+    researcherMode: "Researcher Mode",
+    locked: "Locked",
+    unlocked: "Unlocked",
+    csvExport: "CSV Export",
+    systemMetrics: "System Metrics",
+    analysis: "Analysis",
+    summary: "Summary",
+    rawData: "Raw Data",
+    logicFlow: "Logic Flow",
+    reasoning: "Reasoning",
+    signInTitle: "Sign in with your Participant ID",
+    hcmTitle: "HCM Data Lab"
+  },
+  de: {
+    enterLab: "Labor betreten",
+    participantId: "Teilnehmer-ID",
+    formatHint: "Format: Buchstabe + 6 Ziffern",
+    uploadDataset: "Datensatz hochladen (PDF, CSV, Excel)",
+    askQuestion: "Stellen Sie eine Frage...",
+    readyForAnalysis: "Bereit zur Analyse",
+    analyzingData: "Daten werden analysiert...",
+    status: "STATUS",
+    operational: "BETRIEBSBEREIT",
+    processing: "VERARBEITUNG...",
+    tokenStream: "TOKEN-STROM",
+    latency: "LATENZ",
+    uptime: "BETRIEBSZEIT",
+    configuration: "Konfiguration",
+    temperature: "Temperatur",
+    topP: "Top P",
+    aiDisclaimer: "KI kann Fehler machen. Überprüfen Sie wichtige Informationen.",
+    confidentialDisclaimer: "Bitte geben Sie keine persönlichen oder vertraulichen Informationen ein.",
+    maintenanceTitle: "Bald zurück.",
+    maintenanceText: "Wir führen geplante Updates am HCM Data Lab durch. Das Experiment wird in Kürze fortgesetzt.",
+    researcherMode: "Forschermodus",
+    locked: "Gesperrt",
+    unlocked: "Entsperrt",
+    csvExport: "CSV Export",
+    systemMetrics: "Systemmetriken",
+    analysis: "Analyse",
+    summary: "Zusammenfassung",
+    rawData: "Rohdaten",
+    logicFlow: "Logikfluss",
+    reasoning: "Begründung",
+    signInTitle: "Melden Sie sich mit Ihrer Teilnehmer-ID an",
+    hcmTitle: "HCM Datenlabor"
+  }
+};
+
 // Condition Mapping logic
 const CONDITIONS = {
   1: { name: "Alex", type: "Gold Standard", complexity: "LOW", transparency: "HIGH" },
@@ -100,9 +172,13 @@ try {
 // 2. API HANDLER
 // -----------------------------------------------------------------------------
 
-const callLLM = async (query, contextFilename, conditionId, params) => {
+const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const config = LLM_CONFIG.providers[LLM_CONFIG.activeProvider];
-  const systemPrompt = `You are an expert HCM Analytics assistant. 
+  
+  // Instruct AI to respond in the selected language
+  const languageInstruction = lang === 'de' ? "Respond in German (Deutsch)." : "Respond in English.";
+  
+  const systemPrompt = `You are an expert HCM Analytics assistant. ${languageInstruction}
   ${conditionId === 3 || conditionId === 4 ? "Direct answer only. No reasoning." : "Explain reasoning clearly."}
   Context: ${contextFilename || "General Knowledge"}`;
 
@@ -158,6 +234,7 @@ export default function App() {
   const [condition, setCondition] = useState(1);
   const [isResearcherMode, setIsResearcherMode] = useState(false);
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
+  const [lang, setLang] = useState('en'); // 'en' or 'de'
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -172,6 +249,9 @@ export default function App() {
 
   const isHighComplexity = [2, 4].includes(condition);
   const isHighTransparency = [1, 2].includes(condition);
+
+  // Translation Helper
+  const t = (key) => TRANSLATIONS[lang][key] || key;
 
   // --- GLOBAL SETTINGS LISTENER (MAINTENANCE MODE) ---
   useEffect(() => {
@@ -304,7 +384,7 @@ export default function App() {
     setLoginError(""); 
     const cleanedId = studentId.trim();
     if (!ID_REGEX.test(cleanedId)) {
-      setLoginError("Invalid ID Format. Must be 1 Letter + 6 Digits (e.g., A123456)");
+      setLoginError(t('formatHint')); // Localize error
       return;
     }
     localStorage.setItem("hcm_student_id", cleanedId);
@@ -350,7 +430,8 @@ export default function App() {
     setQuery("");
     
     const start = Date.now();
-    const res = await callLLM(userMsg.text, currentFile?.name, condition, params);
+    // Pass language to LLM call
+    const res = await callLLM(userMsg.text, currentFile?.name, condition, params, lang);
     const latency = Date.now() - start;
 
     setChatHistory(prev => [...prev, { 
@@ -374,6 +455,26 @@ export default function App() {
     logInteraction("FILE_UPLOAD", { name: f.name });
   };
 
+  // --- LANGUAGE SWITCHER COMPONENT ---
+  const LanguageSwitcher = () => (
+    <button 
+      onClick={() => setLang(lang === 'en' ? 'de' : 'en')}
+      className="fixed top-6 right-6 z-50 bg-white/80 backdrop-blur-md border border-gray-200 shadow-lg px-4 py-2 rounded-full flex items-center gap-2 text-sm font-medium text-gray-700 hover:bg-white hover:scale-105 transition-all duration-300"
+    >
+      {lang === 'en' ? (
+        <>
+          <span className="text-lg">🇨🇭</span>
+          <span>Deutsch</span>
+        </>
+      ) : (
+        <>
+          <span className="text-lg">🇬🇧</span>
+          <span>English</span>
+        </>
+      )}
+    </button>
+  );
+
   const MessageRenderer = ({ msg }) => {
     if (msg.type === 'user') return (
       <div className="flex justify-end mb-4">
@@ -388,13 +489,16 @@ export default function App() {
       return (
         <div className="mb-6 bg-white/80 backdrop-blur-xl border border-white/20 rounded-2xl shadow-lg overflow-hidden">
           <div className="bg-gray-50/50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Analysis</span>
+            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{t('analysis')}</span>
             {isHighTransparency && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-semibold flex gap-1 items-center"><Activity size={10}/> {Math.floor(msg.confidence_score*100)}%</span>}
           </div>
           <div className="flex border-b border-gray-100">
-            {['Summary','Raw Data'].map(t => (
-              <button key={t} onClick={()=>setTab(t.toLowerCase().split(' ')[0])} className={`flex-1 py-2 text-xs font-medium transition-colors ${tab===t.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{t}</button>
-            ))}
+            {['Summary','Raw Data'].map(rawT => {
+              const localizedT = rawT === 'Summary' ? t('summary') : t('rawData');
+              return (
+                <button key={rawT} onClick={()=>setTab(rawT.toLowerCase().split(' ')[0])} className={`flex-1 py-2 text-xs font-medium transition-colors ${tab===rawT.toLowerCase().split(' ')[0]?'text-gray-900 bg-white shadow-sm':'text-gray-400 hover:text-gray-600'}`}>{localizedT}</button>
+              );
+            })}
           </div>
           <div className="p-5">
             {tab==='summary' && (
@@ -402,7 +506,7 @@ export default function App() {
                 <p className="text-gray-800 text-sm leading-7 font-normal">{msg.answer}</p>
                 {isHighTransparency && msg.reasoning_trace && (
                   <div className="mt-4 pt-4 border-t border-gray-100">
-                    <h4 className="text-[10px] font-bold text-gray-400 mb-3 flex gap-1 uppercase tracking-wider"><Terminal size={10}/> Logic Flow</h4>
+                    <h4 className="text-[10px] font-bold text-gray-400 mb-3 flex gap-1 uppercase tracking-wider"><Terminal size={10}/> {t('logicFlow')}</h4>
                     <div className="font-mono text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100 leading-relaxed">{msg.reasoning_trace}</div>
                   </div>
                 )}
@@ -426,7 +530,7 @@ export default function App() {
            {isHighTransparency && msg.reasoning_trace && (
               <div className="ml-1 mt-2 p-3 bg-white/60 border border-gray-200/60 rounded-xl text-xs text-gray-500 shadow-sm backdrop-blur-sm">
                 <div className="flex items-center gap-1.5 font-semibold mb-1 text-gray-400 text-[10px] uppercase tracking-wider">
-                  <Sparkles size={10}/> Reasoning
+                  <Sparkles size={10}/> {t('reasoning')}
                 </div>
                 <div className="leading-relaxed opacity-80">{msg.reasoning_trace}</div>
               </div>
@@ -444,10 +548,9 @@ export default function App() {
           <div className="w-20 h-20 bg-white rounded-[2rem] shadow-2xl flex items-center justify-center mx-auto text-gray-900 mb-8 border border-gray-100">
              <Sparkles size={32} className="text-gray-400" />
           </div>
-          <h1 className="text-3xl font-semibold text-gray-900 tracking-tight">Be back soon.</h1>
+          <h1 className="text-3xl font-semibold text-gray-900 tracking-tight">{t('maintenanceTitle')}</h1>
           <p className="text-base text-gray-500 leading-relaxed font-light">
-            We are performing scheduled updates to the HCM Data Lab. 
-            The experiment will resume shortly.
+            {t('maintenanceText')}
           </p>
         </div>
         <div className="absolute bottom-8 right-8">
@@ -462,13 +565,14 @@ export default function App() {
   // --- LOGIN UI ---
   if (!isLoggedIn) return (
     <div className="min-h-screen bg-[#F5F5F7] flex items-center justify-center p-4 font-sans">
+      <LanguageSwitcher />
       <div className="bg-white/80 backdrop-blur-2xl p-10 rounded-[2.5rem] shadow-2xl w-full max-w-[24rem] border border-white/50">
         <div className="text-center mb-10">
           <div className="w-16 h-16 bg-gradient-to-br from-gray-900 to-gray-700 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg text-white">
             <Database size={28} strokeWidth={1.5} />
           </div>
-          <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">HCM Data Lab</h1>
-          <p className="text-sm text-gray-400 mt-2 font-medium">Sign in with your Participant ID</p>
+          <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">{t('hcmTitle')}</h1>
+          <p className="text-sm text-gray-400 mt-2 font-medium">{t('signInTitle')}</p>
         </div>
         
         <form onSubmit={handleLogin} className="space-y-6">
@@ -488,12 +592,12 @@ export default function App() {
                 <AlertTriangle size={12} /> {loginError}
               </div>
             ) : (
-              studentId.length > 0 && <div className="text-[10px] text-gray-400 px-4 font-medium tracking-wide uppercase">Format: Letter + 6 Digits</div>
+              studentId.length > 0 && <div className="text-[10px] text-gray-400 px-4 font-medium tracking-wide uppercase">{t('formatHint')}</div>
             )}
           </div>
 
           <button type="submit" className="w-full bg-gray-900 hover:bg-black text-white py-3.5 rounded-2xl font-medium text-[15px] flex items-center justify-center gap-2 transition-all transform active:scale-[0.98] shadow-lg shadow-gray-900/20">
-            <span>Enter Lab</span>
+            <span>{t('enterLab')}</span>
             <ChevronRight size={16} />
           </button>
           
@@ -503,17 +607,17 @@ export default function App() {
                   <input type="checkbox" checked={isResearcherMode} onChange={handleResearcherToggle} className="peer sr-only"/>
                   <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500"></div>
                 </div>
-                <span className="text-xs text-gray-400 font-medium group-hover:text-gray-600 transition-colors">Researcher Mode</span>
+                <span className="text-xs text-gray-400 font-medium group-hover:text-gray-600 transition-colors">{t('researcherMode')}</span>
              </label>
              
              {isResearcherMode && (
                <div className="grid grid-cols-2 gap-2 animate-in fade-in slide-in-from-top-2">
                  <button type="button" onClick={toggleMaintenanceMode} className={`text-[10px] py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 transition-colors ${isMaintenanceMode ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-gray-50 text-gray-600 border border-gray-100 hover:bg-gray-100'}`}>
                    {isMaintenanceMode ? <Lock size={10}/> : <Unlock size={10}/>} 
-                   {isMaintenanceMode ? "Locked" : "Unlocked"}
+                   {isMaintenanceMode ? t('locked') : t('unlocked')}
                  </button>
                  <button type="button" onClick={exportData} className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-blue-100 transition-colors">
-                   <Download size={10}/> CSV Export
+                   <Download size={10}/> {t('csvExport')}
                  </button>
                </div>
              )}
@@ -526,6 +630,7 @@ export default function App() {
   // --- MAIN UI ---
   return (
     <div className="min-h-screen bg-[#F5F5F7] flex flex-col font-sans text-gray-900">
+      <LanguageSwitcher />
       {isResearcherMode && (
         <div className="bg-gray-900 text-white/80 py-2 px-6 text-[10px] font-medium flex justify-between items-center tracking-wide backdrop-blur-md sticky top-0 z-50">
            <span className="flex items-center gap-2"><Terminal size={10}/> {CONDITIONS[condition].name} — {studentId}</span>
@@ -541,18 +646,18 @@ export default function App() {
         {/* SIDEBAR (Config) - High Complexity Only */}
         {isHighComplexity && (
           <div className="order-2 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/50 rounded-3xl shadow-sm flex flex-col h-auto lg:h-[calc(100vh-80px)] overflow-hidden">
-             <div className="p-5 border-b border-gray-100/50"><h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> Configuration</h2></div>
+             <div className="p-5 border-b border-gray-100/50"><h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> {t('configuration')}</h2></div>
              <div className="p-6 space-y-8">
                <div className="space-y-4">
                  <div className="flex justify-between text-xs font-medium text-gray-500">
-                   <span>Temperature</span>
+                   <span>{t('temperature')}</span>
                    <span className="text-gray-900">{params.temperature}</span>
                  </div>
                  <input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/>
                </div>
                <div className="space-y-4">
                  <div className="flex justify-between text-xs font-medium text-gray-500">
-                   <span>Top P</span>
+                   <span>{t('topP')}</span>
                    <span className="text-gray-900">{params.topP}</span>
                  </div>
                  <input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/>
@@ -592,7 +697,7 @@ export default function App() {
                     <button onClick={e=>{e.stopPropagation();setCurrentFile(null)}} className="p-1 hover:bg-blue-100 rounded-full"><X size={14}/></button>
                   </>
                 ) : (
-                  <span className="text-xs font-medium flex items-center gap-2"><Upload size={14}/> Upload Dataset (PDF, CSV, Excel)</span>
+                  <span className="text-xs font-medium flex items-center gap-2"><Upload size={14}/> {t('uploadDataset')}</span>
                 )}
              </div>
            </div>
@@ -604,7 +709,7 @@ export default function App() {
                  <div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2">
                    <Bot size={40} strokeWidth={1} className="text-gray-400"/>
                  </div>
-                 <p className="text-sm font-medium text-gray-400">Ready for analysis</p>
+                 <p className="text-sm font-medium text-gray-400">{t('readyForAnalysis')}</p>
                </div>
              )}
              {chatHistory.map((m,i)=><MessageRenderer key={i} msg={m}/>)}
@@ -613,7 +718,7 @@ export default function App() {
                  <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
                  <div className="w-2 h-2 bg-gray-300 rounded-full animation-delay-200"></div>
                  <div className="w-2 h-2 bg-gray-300 rounded-full animation-delay-400"></div>
-                 Analyzing data...
+                 {t('analyzingData')}
                </div>
              )}
            </div>
@@ -624,7 +729,7 @@ export default function App() {
                <input 
                  type="text" 
                  className="w-full pl-6 pr-14 py-4 bg-gray-100 rounded-full text-[15px] focus:ring-0 focus:bg-white focus:shadow-lg focus:shadow-blue-500/5 transition-all duration-300 placeholder-gray-400 outline-none font-normal" 
-                 placeholder="Ask a question..." 
+                 placeholder={t('askQuestion')}
                  value={query} 
                  onChange={e=>setQuery(e.target.value)} 
                  onKeyDown={e=>e.key==='Enter'&&handleSend()}
@@ -637,9 +742,17 @@ export default function App() {
                  <Send size={16} fill="white" />
                </button>
              </div>
-             <div className="text-center mt-2">
-               <span className="text-[10px] text-gray-300 font-medium">AI can make mistakes. Verify important information.</span>
+             
+             {/* FOOTER DISCLAIMERS */}
+             <div className="text-center mt-3 space-y-1">
+               <div className="text-[10px] text-red-400 font-medium opacity-80 flex items-center justify-center gap-1">
+                  <Lock size={10} /> {t('confidentialDisclaimer')}
+               </div>
+               <div className="text-[10px] text-gray-300 font-medium">
+                 {t('aiDisclaimer')}
+               </div>
              </div>
+
            </div>
         </div>
 
@@ -647,16 +760,16 @@ export default function App() {
         {isHighComplexity && (
           <div className="order-3 lg:order-3 lg:col-span-3 bg-black text-gray-400 flex flex-col h-auto lg:h-[calc(100vh-80px)] rounded-3xl p-6 font-mono text-[10px] shadow-2xl shadow-gray-900/20 overflow-hidden relative">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 opacity-50"></div>
-            <div className="font-bold text-white mb-8 flex items-center gap-2 uppercase tracking-widest"><Activity size={14} className="text-blue-500"/> System Metrics</div>
+            <div className="font-bold text-white mb-8 flex items-center gap-2 uppercase tracking-widest"><Activity size={14} className="text-blue-500"/> {t('systemMetrics')}</div>
             
             <div className="space-y-6">
               <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-                <div className="text-gray-500 mb-1">STATUS</div>
-                <div className={`text-sm font-bold ${loading ? 'text-yellow-400 animate-pulse' : 'text-emerald-400'}`}>{loading ? "PROCESSING..." : "OPERATIONAL"}</div>
+                <div className="text-gray-500 mb-1">{t('status')}</div>
+                <div className={`text-sm font-bold ${loading ? 'text-yellow-400 animate-pulse' : 'text-emerald-400'}`}>{loading ? t('processing') : t('operational')}</div>
               </div>
 
               <div className="space-y-2">
-                 <div className="flex justify-between"><span>TOKEN STREAM</span><span className="text-blue-400">42/s</span></div>
+                 <div className="flex justify-between"><span>{t('tokenStream')}</span><span className="text-blue-400">42/s</span></div>
                  <div className="w-full bg-gray-900 h-16 rounded-lg flex items-end gap-[2px] p-1 overflow-hidden opacity-60">
                     {Array.from({length: 20}).map((_,i) => (
                       <div key={i} className="flex-1 bg-blue-500 rounded-t-[1px]" style={{height: `${Math.random()*100}%`, opacity: Math.random()}}></div>
@@ -665,8 +778,8 @@ export default function App() {
               </div>
 
               <div className="space-y-2 pt-4 border-t border-gray-800">
-                 <div className="flex justify-between"><span>LATENCY</span><span>24ms</span></div>
-                 <div className="flex justify-between"><span>UPTIME</span><span>99.9%</span></div>
+                 <div className="flex justify-between"><span>{t('latency')}</span><span>24ms</span></div>
+                 <div className="flex justify-between"><span>{t('uptime')}</span><span>99.9%</span></div>
               </div>
             </div>
           </div>
