@@ -27,7 +27,6 @@ import {
 
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
-// Import Authentication functions
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { 
   getFirestore, 
@@ -212,13 +211,13 @@ const getConditionFromId = (studentId) => {
 const ALLOWED_EXTENSIONS = ['pdf', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt'];
 
 let db;
-let auth; // Auth instance
+let auth; 
 let analytics;
 
 try {
   const app = initializeApp(firebaseConfig);
   db = getFirestore(app);
-  auth = getAuth(app); // Initialize Auth
+  auth = getAuth(app); 
   analytics = getAnalytics(app);
   console.log("Firebase & Auth Initialized");
 } catch (e) {
@@ -231,21 +230,16 @@ try {
 
 const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const config = LLM_CONFIG.providers[LLM_CONFIG.activeProvider];
-  
   const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
   const languageInstruction = `Respond in ${langMap[lang] || "English"}.`;
   
   const systemPrompt = `
     You are a specialized HCM (Human Capital Management) Analytics assistant for a university experiment. ${languageInstruction}
-    
     STRICT GUARDRAILS:
     1. You must ONLY answer questions related to Human Resources, Data Analysis, Workforce Planning, Statistics, and the provided dataset.
-    2. If the user asks about unrelated topics (e.g., "write a poem", "history of Rome", "coding a game"), politely decline. State that you are restricted to the HCM Experiment context.
-    3. Do not solve general homework problems unless they involve calculating metrics from the HR data.
-
+    2. If the user asks about unrelated topics (e.g., "write a poem", "history of Rome", "coding a game"), politely decline.
     Condition Settings:
     ${conditionId === 3 || conditionId === 4 ? "Direct answer only. No reasoning." : "Explain reasoning clearly."}
-    
     Context: ${contextFilename || "General Knowledge"}
   `;
 
@@ -268,12 +262,9 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
     });
 
     if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-    
     const data = await response.json();
-    const rawText = data.choices?.[0]?.message?.content || "No response generated.";
-
     return {
-      answer: rawText,
+      answer: data.choices?.[0]?.message?.content || "No response generated.",
       reasoning_trace: conditionId <= 2 ? "Reasoning integrated in response." : null, 
       confidence_score: 0.85 + (Math.random() * 0.1), 
       raw_data_snippet: { note: "Live Data" }
@@ -302,7 +293,7 @@ export default function App() {
   const [isResearcherMode, setIsResearcherMode] = useState(false);
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
   const [lang, setLang] = useState('en'); 
-  const [isAuthReady, setIsAuthReady] = useState(false); // New state for Auth check
+  const [isAuthReady, setIsAuthReady] = useState(false);
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -324,85 +315,64 @@ export default function App() {
   // --- AUTH & GLOBAL SETTINGS ---
   useEffect(() => {
     if (!db || !auth) return;
-
-    // 1. Silent Anonymous Auth
     signInAnonymously(auth)
       .then(() => {
-        console.log("Anonymous Auth Successful");
+        console.log("Auth Ready");
         setIsAuthReady(true);
       })
-      .catch((error) => {
-        console.error("Auth Failed:", error);
-      });
+      .catch((e) => console.error("Auth Failed:", e));
 
-    // 2. Listen for Settings
     const unsub = onSnapshot(doc(db, "settings", "config"), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setIsMaintenanceMode(!!data.maintenance_mode);
-      }
-    });
+      if (docSnap.exists()) setIsMaintenanceMode(!!docSnap.data().maintenance_mode);
+    }, (err) => console.log("Settings fetch error (expected if config doc missing):", err));
     return () => unsub();
-  }, []);
-
-  // --- EFFECT: AUTO SCROLL TO BOTTOM ---
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory, loading]);
-
-  // --- AUTO-LOGIN ---
-  useEffect(() => {
-    const savedId = localStorage.getItem("hcm_student_id");
-    if (savedId) {
-      setStudentId(savedId);
-    }
   }, []);
 
   // --- SESSION MANAGEMENT ---
   useEffect(() => {
-    // Only start session if user has clicked login AND we have anonymous auth
     if (!isLoggedIn || !db || !isAuthReady) return;
-
-    let localSessionId = null;
     const startSession = async () => {
       try {
         const sessionRef = await addDoc(collection(db, "sessions"), {
           student_id: studentId,
           condition_id: condition,
-          start_time: serverTimestamp(),
-          last_active: serverTimestamp(),
-          duration_minutes: 0,
+          start_time: serverTimestamp(), // Server time
+          client_timestamp: Date.now(),  // Fallback numeric time
+          last_active: Date.now(),       // Numeric for simpler math
           interaction_count: 0,
-          date_str: new Date().toISOString().split('T')[0],
-          timestamp: Date.now()
+          date_str: new Date().toISOString().split('T')[0]
         });
         setSessionId(sessionRef.id);
-        localSessionId = sessionRef.id;
-        console.log("Session Started:", localSessionId);
-      } catch(e) { 
-        console.error("Session start failed.", e);
-      }
+      } catch(e) { console.error("Session Creation Failed:", e); }
     };
     startSession();
-    const heartbeat = setInterval(async () => {
-      if (localSessionId) {
-        const ref = doc(db, "sessions", localSessionId);
-        try { await updateDoc(ref, { last_active: serverTimestamp() }); } catch(e) {}
-      }
-    }, 60000);
-    return () => clearInterval(heartbeat);
   }, [isLoggedIn, isAuthReady]);
+
+  // --- HEARTBEAT (Updates Duration) ---
+  useEffect(() => {
+    if (!sessionId) return;
+    const interval = setInterval(() => {
+      updateDoc(doc(db, "sessions", sessionId), { last_active: Date.now() }).catch(()=>{});
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [sessionId]);
 
   // --- LOGGING ---
   const logInteraction = async (type, payload) => {
     if (!db || !sessionId) return;
     setInteractionCount(prev => prev + 1);
     try {
-      await addDoc(collection(db, `sessions/${sessionId}/logs`), { type, ...payload, timestamp: serverTimestamp() });
-      updateDoc(doc(db, "sessions", sessionId), { interaction_count: interactionCount + 1 });
+      await addDoc(collection(db, `sessions/${sessionId}/logs`), { 
+        type, ...payload, timestamp: Date.now() 
+      });
+      updateDoc(doc(db, "sessions", sessionId), { 
+        interaction_count: interactionCount + 1,
+        last_active: Date.now()
+      });
     } catch(e) {}
   };
 
+  // --- REACTION TIMER ---
   useEffect(() => {
     if (!lastResponseTimestamp) return;
     const handleInteraction = (e) => {
@@ -415,60 +385,45 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- DATA EXPORT ---
-  const parseDate = (val) => {
-    if (!val) return null;
-    if (val.toDate && typeof val.toDate === 'function') return val.toDate();
-    if (val instanceof Date) return val;
-    return new Date(val); 
-  };
-
+  // --- DATA EXPORT (CRASH PROOFED) ---
   const exportData = async () => {
     if (!db) return alert("Database not connected");
-    console.log("Starting export...");
     
     try {
       const q = query(collection(db, "sessions"));
       const snapshot = await getDocs(q);
       
-      if (snapshot.empty) {
-        return alert("Database is empty. No sessions recorded yet.");
-      }
+      if (snapshot.empty) return alert("No data. Make sure you have logged in at least once.");
       
       const students = {};
       const allDates = new Set();
       
-      snapshot.forEach(doc => {
-        const data = doc.data();
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
         const sId = data.student_id || "Unknown";
-        let dateStr = data.date_str;
-        if (!dateStr) {
-            const d = parseDate(data.start_time);
-            dateStr = d ? d.toISOString().split('T')[0] : "Unknown-Date";
-        }
+        const date = data.date_str || "Unknown-Date";
         
         if (!students[sId]) {
           students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
         
-        let sessionDuration = 0;
-        const start = parseDate(data.start_time);
-        const end = parseDate(data.last_active);
+        // Use numeric timestamps (fallback to 0 if missing)
+        const start = data.client_timestamp || 0;
+        const end = data.last_active || 0;
+        let duration = 0;
         
-        if (start && end) {
-           sessionDuration = Math.round((end - start) / 60000);
-           if (sessionDuration < 0) sessionDuration = 0;
+        if (start && end && end > start) {
+           duration = Math.round((end - start) / 60000); 
         }
         
-        students[sId].total_duration += sessionDuration;
+        students[sId].total_duration += duration;
         students[sId].total_clicks += (data.interaction_count || 0);
         students[sId].total_sessions += 1;
         
-        allDates.add(dateStr);
-        
-        if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
-        students[sId].dates[dateStr].duration += sessionDuration;
-        students[sId].dates[dateStr].clicks += (data.interaction_count || 0);
+        allDates.add(date);
+        if (!students[sId].dates[date]) students[sId].dates[date] = { duration: 0, clicks: 0 };
+        students[sId].dates[date].duration += duration;
+        students[sId].dates[date].clicks += (data.interaction_count || 0);
       });
       
       const sortedDates = Array.from(allDates).sort();
@@ -490,14 +445,14 @@ export default function App() {
       const encodedUri = encodeURI(csvContent);
       const link = document.createElement("a");
       link.setAttribute("href", encodedUri);
-      link.setAttribute("download", `hcm_data_${new Date().toISOString().split('T')[0]}.csv`);
+      link.setAttribute("download", `hcm_data.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       
     } catch (e) { 
-      console.error("Export Crash:", e);
-      alert(`Export failed: ${e.message}`); 
+      console.error("Export Error:", e);
+      alert("Export failed. See console for details."); 
     }
   };
 
@@ -524,13 +479,12 @@ export default function App() {
   };
 
   const toggleMaintenanceMode = async () => {
-    if (!db) return;
+    if (!db || !auth.currentUser) return alert("Not authenticated with DB.");
     try {
       const newState = !isMaintenanceMode;
       await setDoc(doc(db, "settings", "config"), { maintenance_mode: newState }, { merge: true });
     } catch(e) {
-      console.error("Error toggling maintenance:", e);
-      alert(`Failed to update maintenance mode: ${e.message}. Check Firestore permissions.`);
+      alert(`Failed: ${e.message}`);
     }
   };
 
@@ -564,14 +518,12 @@ export default function App() {
     setLoading(false);
   };
 
-  // VALIDATES FILE SIZE AND TYPE
   const validateAndSetFile = (file) => {
     const ext = file.name.split('.').pop().toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
        alert("File Type not Supported. Allowed: PDF, DOCX, PPTX, XLSX, CSV"); 
        return;
     }
-    // Limit: 500KB (~2 text-heavy pages)
     if (file.size > 500 * 1024) { 
       alert("File exceeds limit. Only one file with up to two pages is permitted.");
       return;
@@ -620,17 +572,10 @@ export default function App() {
     );
   };
 
-  // --- LOADING SKELETON ---
-  const LoadingSkeleton = () => (
-    <div className="max-w-3xl mr-auto flex gap-4 items-start animate-pulse">
-      <div className="w-8 h-8 rounded-full bg-gray-200 flex-shrink-0"></div>
-      <div className="flex-1 space-y-2">
-         <div className="h-4 bg-gray-200 rounded-md w-3/4"></div>
-         <div className="h-4 bg-gray-200 rounded-md w-1/2"></div>
-         <div className="h-4 bg-gray-200 rounded-md w-2/3"></div>
-      </div>
-    </div>
-  );
+  // --- UI COMPONENTS ---
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory, loading]);
 
   const MessageRenderer = ({ msg }) => {
     if (msg.type === 'user') return (
@@ -686,7 +631,7 @@ export default function App() {
            </div>
            {isHighTransparency && msg.reasoning_trace && (
               <div className="ml-1 mt-2 p-4 bg-white/70 border border-gray-200/50 rounded-2xl text-xs text-gray-500 shadow-sm backdrop-blur-md">
-                <div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider">
+                <div className="flex items-center gap-1.5 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider">
                   <Sparkles size={10}/> {t('reasoning')}
                   <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">
                     {t('confidence')}: {Math.floor(msg.confidence_score*100)}%
@@ -867,7 +812,7 @@ export default function App() {
 
            {/* Chat History */}
            <div className="flex-1 overflow-y-auto p-6 scroll-smooth pb-4">
-             {chatHistory.length===0 && (
+             {chatHistory.length === 0 && (
                <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards">
                  <div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner">
                    <Bot size={40} strokeWidth={1} className="text-gray-400"/>
@@ -875,7 +820,7 @@ export default function App() {
                  <p className="text-sm font-medium text-gray-400">{t('readyForAnalysis')}</p>
                </div>
              )}
-             {chatHistory.map((m,i)=><MessageRenderer key={i} msg={m}/>)}
+             {chatHistory.map((msg, i) => <MessageRenderer key={i} msg={msg} />)}
              {loading && <LoadingSkeleton />}
              <div ref={bottomRef} />
            </div>
@@ -915,55 +860,17 @@ export default function App() {
            </div>
         </div>
 
-        {/* SIDEBAR (Metrics) - High Complexity Only */}
+        {/* Sidebar (Metrics) - High Complexity Only */}
         {isHighComplexity && (
-          <div className="order-3 lg:order-3 lg:col-span-3 bg-[#1c1c1e] text-gray-400 flex flex-col h-auto lg:h-[calc(100vh-80px)] rounded-[2rem] p-8 font-mono text-[10px] shadow-2xl shadow-gray-900/20 overflow-hidden relative animate-in slide-in-from-right-4 duration-700">
-            {/* macOS Widget Style Header */}
-            <div className="font-bold text-white mb-8 flex items-center gap-2 uppercase tracking-widest opacity-90">
-              <Activity size={14} className="text-blue-500"/> {t('systemMetrics')}
-            </div>
-            
-            <div className="space-y-8 relative z-10">
-              {/* Status Card */}
-              <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-sm">
-                <div className="text-gray-500 mb-2 tracking-wider">{t('status')}</div>
-                <div className={`text-xs font-bold flex items-center gap-2 ${loading ? 'text-yellow-400' : 'text-emerald-400'}`}>
-                  <span className={`w-2 h-2 rounded-full ${loading ? 'bg-yellow-400 animate-pulse' : 'bg-emerald-400'}`}></span>
-                  {loading ? t('processing') : t('operational')}
-                </div>
-              </div>
-
-              {/* Token Stream Viz */}
-              <div className="space-y-3">
-                 <div className="flex justify-between text-xs">
-                   <span className="tracking-wider">{t('tokenStream')}</span>
-                   <span className="text-blue-400 font-bold">42/s</span>
-                 </div>
-                 <div className="w-full bg-black/40 h-24 rounded-xl flex items-end gap-[3px] p-2 overflow-hidden border border-white/5">
-                    {Array.from({length: 24}).map((_,i) => (
-                      <div key={i} className="flex-1 bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-[1px]" style={{height: `${20 + Math.random()*80}%`, opacity: 0.4 + Math.random()*0.6}}></div>
-                    ))}
-                 </div>
-              </div>
-
-              {/* Technical Stats Table */}
-              <div className="space-y-3 pt-6 border-t border-white/10">
-                 <div className="flex justify-between items-center py-1">
-                   <span className="flex items-center gap-2"><Zap size={12} className="text-yellow-500"/> {t('latency')}</span>
-                   <span className="text-white font-mono">24ms</span>
-                 </div>
-                 <div className="flex justify-between items-center py-1">
-                   <span className="flex items-center gap-2"><Cpu size={12} className="text-purple-500"/> {t('uptime')}</span>
-                   <span className="text-white font-mono">99.9%</span>
-                 </div>
-              </div>
-            </div>
-            
-            {/* Background Glow */}
-            <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-[80px] pointer-events-none"></div>
-            <div className="absolute bottom-0 left-0 w-full h-32 bg-gradient-to-t from-black to-transparent pointer-events-none"></div>
+          <div className="order-3 lg:order-3 w-full lg:col-span-3 bg-black text-gray-300 flex flex-col h-auto lg:h-[calc(100vh-40px)] font-mono text-xs p-4">
+            <div className="font-bold text-green-500 mb-4 flex items-center gap-2"><Activity size={16}/> System Metrics</div>
+            <div>Status: {loading ? "Processing" : "Idle"}</div>
+            {/* Visual filler for complexity */}
+            <div className="mt-8 text-gray-500">Token Stream...</div>
+            <div className="flex gap-1 h-10 mt-2 items-end opacity-50">{[30,50,20,60,40,80].map((h,i)=><div key={i} className="flex-1 bg-gray-700" style={{height:`${h}%`}}></div>)}</div>
           </div>
         )}
+
       </div>
     </div>
   );
