@@ -110,7 +110,7 @@ const TRANSLATIONS = {
     hcmTitle: "HCM Data Lab"
   },
   de: {
-    enterLab: "Lab betreten",
+    enterLab: "Labor betreten",
     participantId: "Teilnehmer-ID",
     formatHint: "Format: Buchstabe + 6 Ziffern",
     uploadDataset: "Datei hierher ziehen (Pdf, docx, pptx, xlsx)",
@@ -128,7 +128,7 @@ const TRANSLATIONS = {
     topP: "Top P",
     aiDisclaimer: "KI kann Fehler machen. Überprüfen Sie wichtige Informationen.",
     confidentialDisclaimer: "Bitte geben Sie keine persönlichen oder vertraulichen Informationen ein.",
-    auditDisclaimer: "Sitzungsaktivität wird zu Forschungszwecken protokolliert.",
+    auditDisclaimer: "Sitzungsaktivität wird aus Forschungsgründen protokolliert.",
     maintenanceTitle: "Bald zurück.",
     maintenanceText: "Wir führen geplante Updates am HCM Data Lab durch. Das Experiment wird in Kürze fortgesetzt.",
     researcherMode: "Forschermodus",
@@ -145,7 +145,7 @@ const TRANSLATIONS = {
     hcmTitle: "HCM Datenlabor"
   },
   it: {
-    enterLab: "Entra nel Lab",
+    enterLab: "Entra nel Laboratorio",
     participantId: "ID Partecipante",
     formatHint: "Formato: Lettera + 6 Cifre",
     uploadDataset: "Trascina file qui (Pdf, docx, pptx, xlsx)",
@@ -288,7 +288,7 @@ export default function App() {
   const [condition, setCondition] = useState(1);
   const [isResearcherMode, setIsResearcherMode] = useState(false);
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
-  const [lang, setLang] = useState('en'); // en, de, it
+  const [lang, setLang] = useState('en'); 
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -384,49 +384,84 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- DATA EXPORT ---
+  // --- DATA EXPORT (FIXED) ---
+  // Helper to safely parse dates
+  const parseFirestoreDate = (val) => {
+    if (!val) return null;
+    if (val.toDate && typeof val.toDate === 'function') return val.toDate(); // Firestore Timestamp
+    if (val instanceof Date) return val; // JS Date
+    if (typeof val === 'number' || typeof val === 'string') return new Date(val); // fallback
+    return null;
+  };
+
   const exportData = async () => {
     if (!db) return alert("Database not connected");
     try {
-      const q = query(collection(db, "sessions"), orderBy("student_id"));
+      // Removed orderBy to prevent index error on first run. Sort in memory instead.
+      const q = query(collection(db, "sessions"));
       const snapshot = await getDocs(q);
-      if (snapshot.empty) return alert("No data found.");
+      
+      if (snapshot.empty) return alert("No data found. (Check Firestore Rules if you just started)");
+      
       const students = {};
       const allDates = new Set();
+      
       snapshot.forEach(doc => {
         const data = doc.data();
         const sId = data.student_id || "Unknown";
         const date = data.date_str || new Date().toISOString().split('T')[0];
-        if (!students[sId]) students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
+        
+        if (!students[sId]) {
+          students[sId] = { 
+            condition: data.condition_id, 
+            total_duration: 0, 
+            total_clicks: 0, 
+            total_sessions: 0, 
+            dates: {} 
+          };
+        }
+        
+        // Safe Duration Calculation
         let sessionDuration = 0;
-        if (data.start_time && data.last_active) {
-           const start = data.start_time.toDate ? data.start_time.toDate() : new Date(data.start_time);
-           const end = data.last_active.toDate ? data.last_active.toDate() : new Date(data.last_active);
+        const start = parseFirestoreDate(data.start_time);
+        const end = parseFirestoreDate(data.last_active);
+
+        if (start && end) {
            sessionDuration = Math.round((end - start) / 60000);
            if (sessionDuration < 0) sessionDuration = 0;
+           // Cap crazy durations (e.g. left open overnight) for analysis sanity? 
+           // For now, raw data.
         }
+        
         students[sId].total_duration += sessionDuration;
         students[sId].total_clicks += (data.interaction_count || 0);
         students[sId].total_sessions += 1;
+        
         allDates.add(date);
+        
         if (!students[sId].dates[date]) students[sId].dates[date] = { duration: 0, clicks: 0 };
         students[sId].dates[date].duration += sessionDuration;
         students[sId].dates[date].clicks += (data.interaction_count || 0);
       });
+      
       const sortedDates = Array.from(allDates).sort();
+      
       let csvContent = "data:text/csv;charset=utf-8,Student_ID,Condition,Total_Sessions,Total_Active_Mins,Total_Clicks,Avg_Session_Length_Mins";
       sortedDates.forEach(date => { csvContent += `,${date}_Mins,${date}_Clicks`; });
       csvContent += "\n";
+      
       Object.keys(students).forEach(sId => {
         const s = students[sId];
         const avgSession = s.total_sessions > 0 ? (s.total_duration / s.total_sessions).toFixed(2) : 0;
         let row = `${sId},${s.condition},${s.total_sessions},${s.total_duration},${s.total_clicks},${avgSession}`;
+        
         sortedDates.forEach(date => {
           const dData = s.dates[date] || { duration: 0, clicks: 0 };
           row += `,${dData.duration},${dData.clicks}`;
         });
         csvContent += row + "\n";
       });
+      
       const encodedUri = encodeURI(csvContent);
       const link = document.createElement("a");
       link.setAttribute("href", encodedUri);
@@ -434,7 +469,11 @@ export default function App() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    } catch (e) { alert("Export failed: " + e.message); }
+      
+    } catch (e) { 
+      console.error(e);
+      alert(`Export failed: ${e.message}. Check console for details.`); 
+    }
   };
 
   // --- HANDLERS ---
