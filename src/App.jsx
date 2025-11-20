@@ -22,7 +22,8 @@ import {
   Cpu,
   Zap,
   Eye,
-  AlertCircle
+  AlertCircle,
+  FileJson
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -100,6 +101,7 @@ const TRANSLATIONS = {
     locked: "Locked",
     unlocked: "Unlocked",
     csvExport: "CSV Export",
+    jsonExport: "Raw JSON",
     systemMetrics: "System Metrics",
     analysis: "Analysis",
     summary: "Summary",
@@ -136,6 +138,7 @@ const TRANSLATIONS = {
     locked: "Gesperrt",
     unlocked: "Entsperrt",
     csvExport: "CSV Export",
+    jsonExport: "Roh-JSON",
     systemMetrics: "Systemmetriken",
     analysis: "Analyse",
     summary: "Zusammenfassung",
@@ -172,6 +175,7 @@ const TRANSLATIONS = {
     locked: "Bloccato",
     unlocked: "Sbloccato",
     csvExport: "Esporta CSV",
+    jsonExport: "JSON Grezzo",
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
     summary: "Riepilogo",
@@ -353,14 +357,12 @@ export default function App() {
     if (!isLoggedIn || !db || !isAuthReady) return;
     const startSession = async () => {
       try {
-        // IMPORTANT: Save primitive unix numbers (Date.now()) for reliable export
-        const now = Date.now();
+        const now = Date.now(); // Capture purely numeric timestamp
         const sessionRef = await addDoc(collection(db, "sessions"), {
           student_id: studentId,
           condition_id: condition,
-          server_start_time: serverTimestamp(), 
-          start_unix: now,       // <--- PRIMITIVE NUMBER
-          last_active_unix: now, // <--- PRIMITIVE NUMBER
+          start_unix: now,       // <--- Critical: Primitive Number
+          last_active_unix: now, // <--- Critical: Primitive Number
           interaction_count: 0,
           date_str: new Date().toISOString().split('T')[0]
         });
@@ -376,8 +378,8 @@ export default function App() {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      // Update last_active_unix (primitive number)
       if (sessionIdRef.current && db) {
+        // Update using numeric timestamp
         updateDoc(doc(db, "sessions", sessionIdRef.current), { last_active_unix: Date.now() }).catch(()=>{});
       }
     }, 60000);
@@ -393,7 +395,6 @@ export default function App() {
       await addDoc(collection(db, `sessions/${sessionId}/logs`), { 
         type, ...payload, timestamp_unix: now 
       });
-      // Keep updating the main session doc with primitives
       updateDoc(doc(db, "sessions", sessionId), { 
         interaction_count: interactionCount + 1,
         last_active_unix: now
@@ -413,10 +414,10 @@ export default function App() {
     return () => ['mousedown','keydown','scroll','touchstart'].forEach(evt => window.removeEventListener(evt, handleInteraction, opts));
   }, [lastResponseTimestamp]);
 
-  // --- EXPORT DATA (PRIMITIVE-ONLY VERSION) ---
+  // --- EXPORT DATA (ROBUST PRIMITIVE) ---
+  
   const exportData = async () => {
     if (!db) return alert("Database not connected");
-    console.log("Starting export...");
     
     try {
       const q = query(collection(db, "sessions"));
@@ -428,92 +429,88 @@ export default function App() {
       const allDates = new Set();
       
       snapshot.forEach(docSnap => {
-        // Wrap in try/catch to ensure one bad row doesn't kill the export
-        try {
-          const data = docSnap.data();
-          const sId = data.student_id || "Unknown";
-          
-          // Date Logic: Use date_str if available, else use start_unix
-          let dateStr = data.date_str;
-          if (!dateStr && typeof data.start_unix === 'number') {
-             dateStr = new Date(data.start_unix).toISOString().split('T')[0];
-          }
-          if (!dateStr) dateStr = "Unknown-Date";
-
-          if (!students[sId]) {
-            students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {}, raw_json: [] };
-          }
-
-          // DURATION: Only use the _unix primitive numbers. Ignore Objects.
-          let duration = 0;
-          const start = data.start_unix;
-          const end = data.last_active_unix;
-          
-          // Simple number check
-          if (typeof start === 'number' && typeof end === 'number' && end > start) {
-             duration = Math.round((end - start) / 60000);
-          } else {
-             // Fallback for old data (try client_timestamp if it was a number)
-             if (typeof data.client_timestamp === 'number' && typeof data.last_active === 'number') {
-                duration = Math.round((data.last_active - data.client_timestamp) / 60000);
-             }
-          }
-
-          const clicks = data.interaction_count || 0;
-
-          students[sId].total_duration += duration;
-          students[sId].total_clicks += clicks;
-          students[sId].total_sessions += 1;
-          
-          // Raw data dump for safety
-          students[sId].raw_json.push({ id: docSnap.id, start, end, clicks });
-
-          allDates.add(dateStr);
-          if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
-          students[sId].dates[dateStr].duration += duration;
-          students[sId].dates[dateStr].clicks += clicks;
-
-        } catch (rowErr) {
-          console.warn("Skipped row due to error:", rowErr);
+        // SAFE EXTRACTION: No functions, only properties
+        const data = docSnap.data();
+        const sId = data.student_id || "Unknown";
+        const dateStr = data.date_str || "Unknown-Date";
+        
+        if (!students[sId]) {
+          students[sId] = { condition: data.condition_id, total_duration: 0, total_clicks: 0, total_sessions: 0, dates: {} };
         }
+        
+        // DURATION CALCULATION: Pure Math on Numbers
+        // We strictly ignore any 'Timestamp' objects to prevent crashes
+        let duration = 0;
+        const start = typeof data.start_unix === 'number' ? data.start_unix : 0;
+        const end = typeof data.last_active_unix === 'number' ? data.last_active_unix : 0;
+        
+        if (start > 0 && end > 0 && end > start) {
+           duration = Math.round((end - start) / 60000);
+        }
+        
+        const clicks = data.interaction_count || 0;
+
+        students[sId].total_duration += duration;
+        students[sId].total_clicks += clicks;
+        students[sId].total_sessions += 1;
+        
+        allDates.add(dateStr);
+        
+        if (!students[sId].dates[dateStr]) students[sId].dates[dateStr] = { duration: 0, clicks: 0 };
+        students[sId].dates[dateStr].duration += duration;
+        students[sId].dates[dateStr].clicks += clicks;
       });
       
       const sortedDates = Array.from(allDates).sort();
-      
-      // Build Header
       let csv = "data:text/csv;charset=utf-8,Student_ID,Condition,Total_Sessions,Total_Active_Mins,Total_Clicks,Avg_Session_Mins";
       sortedDates.forEach(d => { csv += `,${d}_Mins,${d}_Clicks`; });
-      csv += ",JSON_Dump_Backup"; // Extra column for safety
       csv += "\n";
       
-      // Build Rows
       Object.keys(students).forEach(sId => {
         const s = students[sId];
         const avg = s.total_sessions > 0 ? (s.total_duration / s.total_sessions).toFixed(1) : 0;
         let row = `${sId},${s.condition},${s.total_sessions},${s.total_duration},${s.total_clicks},${avg}`;
-        
         sortedDates.forEach(d => {
           const v = s.dates[d] || { duration: 0, clicks: 0 };
           row += `,${v.duration},${v.clicks}`;
         });
-        
-        // Add raw JSON dump (escaped quotes)
-        const jsonDump = JSON.stringify(s.raw_json).replace(/"/g, '""'); 
-        row += `,"${jsonDump}"`;
-
         csv += row + "\n";
       });
       
+      // Use Blob for download (Crash Proof)
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.setAttribute("href", encodeURI(csv));
-      link.setAttribute("download", "hcm_data_safe.csv");
+      link.setAttribute("href", url);
+      link.setAttribute("download", "hcm_data.csv");
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+
     } catch (e) { 
-      console.error("Export Error:", e);
+      console.error("Export Crash:", e);
       alert(`Export failed: ${e.message}`); 
     }
+  };
+
+  // --- BACKUP JSON EXPORT ---
+  const exportRawJSON = async () => {
+    if (!db) return;
+    try {
+      const snapshot = await getDocs(collection(db, "sessions"));
+      const rawData = [];
+      snapshot.forEach(doc => rawData.push({ id: doc.id, ...doc.data() }));
+      
+      const jsonStr = JSON.stringify(rawData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "hcm_raw_backup.json";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch(e) { alert("Backup failed"); }
   };
 
   // --- HANDLERS ---
@@ -732,6 +729,7 @@ export default function App() {
                <div className="grid grid-cols-2 gap-2 animate-in fade-in">
                  <button type="button" onClick={toggleMaintenanceMode} className="text-[10px] py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-100">{isMaintenanceMode?<Lock size={10}/>:<Unlock size={10}/>}{isMaintenanceMode?t('locked'):t('unlocked')}</button>
                  <button type="button" onClick={exportData} className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-blue-100"><Download size={10}/>{t('csvExport')}</button>
+                 <button type="button" onClick={exportRawJSON} className="col-span-2 text-[10px] bg-gray-50 text-gray-600 border border-gray-200 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-gray-100"><FileJson size={10}/>{t('jsonExport')}</button>
                </div>
              )}
           </div>
