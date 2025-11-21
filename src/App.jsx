@@ -31,7 +31,7 @@ import {
   ListPlus,
   Save,
   Globe,
-  Code2 // Added for Vector Context
+  Code2
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -153,7 +153,7 @@ const TRANSLATIONS = {
     systemMetrics: "System Metrics",
     analysis: "Analysis",
     summary: "Summary",
-    rawData: "Vector Context", // RENAMED to sound technical
+    rawData: "Vector Context", 
     logicFlow: "Logic Flow",
     reasoning: "Reasoning",
     confidence: "Confidence",
@@ -199,7 +199,7 @@ const TRANSLATIONS = {
     systemMetrics: "Systemmetriken",
     analysis: "Analyse",
     summary: "Zusammenfassung",
-    rawData: "Vektor-Kontext", // RENAMED
+    rawData: "Vektor-Kontext",
     logicFlow: "Logikfluss",
     reasoning: "Begründung",
     confidence: "Konfidenz",
@@ -245,7 +245,7 @@ const TRANSLATIONS = {
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
     summary: "Riepilogo",
-    rawData: "Contesto Vettoriale", // RENAMED
+    rawData: "Contesto Vettoriale",
     logicFlow: "Flusso Logico",
     reasoning: "Ragionamento",
     confidence: "Confidenza",
@@ -302,6 +302,10 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
   const instruction = `Respond in ${langMap[lang] || "English"}.`;
   
+  // Determine transparency level for the prompt
+  // Conditions 1 (Alex) and 2 (Danny) are High Transparency -> Need Logic Separation
+  const isTransparent = conditionId <= 2;
+  
   const systemPrompt = `
     You are a specialized Human Capital Management (HCM) & HR Analytics assistant. ${instruction}
     
@@ -314,8 +318,12 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
     2. Say: "I am designed to assist with Human Capital and HR related questions only."
     3. Do NOT mention that you are part of an experiment or study.
 
-    Condition Settings:
-    ${conditionId === 3 || conditionId === 4 ? "Direct answer only. No reasoning." : "Explain reasoning clearly."}
+    FORMATTING INSTRUCTIONS:
+    ${isTransparent ? 
+      "You MUST split your response into two distinct parts.\nPart 1: A detailed step-by-step reasoning of how you derived the answer.\nPart 2: The clear final answer.\n\nFormat your response exactly like this:\n[REASONING]\n(Write your logic here)\n[ANSWER]\n(Write your final answer here)" 
+      : 
+      "Provide only the direct answer. Do NOT explain your reasoning steps."}
+    
     Context: ${contextFilename || "General Knowledge"}
   `;
 
@@ -340,8 +348,23 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
     const data = await response.json();
     const confidence = data.confidence_score || (0.85 + (Math.random() * 0.1));
     
-    // --- FAKE TECHNICAL DATA GENERATOR ---
-    // This creates convincing looking "Vector" data to increase cognitive load
+    let content = data.choices?.[0]?.message?.content || "No response.";
+    let answer = content;
+    let reasoning = null;
+
+    // PARSE RESPONSE FOR TRANSPARENCY
+    if (isTransparent) {
+      if (content.includes("[REASONING]") && content.includes("[ANSWER]")) {
+        const parts = content.split("[ANSWER]");
+        reasoning = parts[0].replace("[REASONING]", "").trim();
+        answer = parts[1].trim();
+      } else {
+        // Fallback if model fails to format
+        reasoning = "Analysis based on provided HR metrics and general principles.";
+      }
+    }
+
+    // FAKE VECTOR DATA GENERATOR (For High Complexity Visuals)
     const vectorData = {
        "shard_id": `hcm-vec-${Math.floor(Math.random() * 99)}`,
        "embedding_dim": 4096,
@@ -359,10 +382,10 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
     };
 
     return {
-      answer: data.choices?.[0]?.message?.content || "No response.",
-      reasoning_trace: conditionId <= 2 ? "Reasoning included." : null, 
+      answer: answer,
+      reasoning_trace: reasoning, 
       confidence_score: confidence, 
-      raw_data_snippet: vectorData // Updated payload
+      raw_data_snippet: vectorData
     };
   } catch (error) {
     return {
@@ -378,7 +401,6 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
 // 4. UI COMPONENTS
 // -----------------------------------------------------------------------------
 
-// PORTAL TOOLTIP (Fixes Overflow Issues)
 const Tooltip = ({ text, children }) => {
   const [show, setShow] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0 });
@@ -388,7 +410,7 @@ const Tooltip = ({ text, children }) => {
     if (triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
       setCoords({
-        top: rect.top - 10, // Position above
+        top: rect.top - 10,
         left: rect.left + rect.width / 2
       });
       setShow(true);
@@ -406,7 +428,6 @@ const Tooltip = ({ text, children }) => {
           style={{ top: coords.top, left: coords.left }}
         >
           {text}
-          {/* Arrow */}
           <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900/90"></div>
         </div>,
         document.body
@@ -588,22 +609,18 @@ function AppContent() {
       return;
     }
 
-    // CHECK ALLOWLIST IN FIRESTORE
     try {
       const idRef = doc(db, "allowed_users", cleanedId);
       const idSnap = await getDoc(idRef);
       
       if (idSnap.exists()) {
-        // Access Granted
         localStorage.setItem("hcm_student_id", cleanedId);
         setCondition(getConditionFromId(cleanedId));
         setIsLoggedIn(true);
       } else {
-        // Access Denied
         setLoginError(t('accessDenied'));
       }
     } catch (err) {
-      // Fallback for testing: Allow login if DB check fails (network issue or missing allowed_users collection)
       console.warn("Verification skipped (DB error). Logging in...", err);
       localStorage.setItem("hcm_student_id", cleanedId);
       setCondition(getConditionFromId(cleanedId));
@@ -728,8 +745,8 @@ function AppContent() {
           <div className="p-6">
             {tab==='summary' && (
               <div className="space-y-4">
-                <p className="text-gray-800 text-sm leading-7 font-normal">{msg.answer}</p>
-                {isHighTransparency && <div className="mt-6 pt-4 border-t border-gray-100"><h4 className="text-[10px] font-bold text-gray-400 mb-3 uppercase tracking-wider flex items-center gap-2"><Terminal size={10}/> {t('logicFlow')}</h4><div className="font-mono text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100 leading-relaxed">{msg.reasoning_trace}</div></div>}
+                <p className="text-gray-800 text-sm leading-7 font-normal whitespace-pre-line">{msg.answer}</p>
+                {isHighTransparency && msg.reasoning_trace && <div className="mt-6 pt-4 border-t border-gray-100"><h4 className="text-[10px] font-bold text-gray-400 mb-3 uppercase tracking-wider flex items-center gap-2"><Terminal size={10}/> {t('logicFlow')}</h4><div className="font-mono text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100 leading-relaxed whitespace-pre-line">{msg.reasoning_trace}</div></div>}
               </div>
             )}
             {tab==='raw' && <pre className="text-xs bg-gray-900 p-5 rounded-xl border border-gray-800 overflow-auto text-green-400 font-mono shadow-inner">{JSON.stringify(msg.raw_data_snippet,null,2)}</pre>}
@@ -742,8 +759,8 @@ function AppContent() {
       <div className="mb-8 max-w-3xl mr-auto flex gap-4 items-start animate-in slide-in-from-bottom-2">
         <div className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-500 flex-shrink-0 shadow-sm"><Brain size={18}/></div>
         <div className="space-y-2 min-w-0 flex-1">
-           <div className="bg-[#E9E9EB] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block">{msg.answer}</div>
-           {isHighTransparency && <div className="ml-1 mt-2 p-4 bg-white/80 border border-gray-200/60 rounded-2xl text-xs text-gray-600 shadow-sm backdrop-blur-md"><div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider"><Sparkles size={10}/> {t('reasoning')}<span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">{t('confidence')}: {confidence}%</span></div><div className="leading-relaxed">{msg.reasoning_trace}</div></div>}
+           <div className="bg-[#E9E9EB] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block whitespace-pre-line">{msg.answer}</div>
+           {isHighTransparency && msg.reasoning_trace && <div className="ml-1 mt-2 p-4 bg-white/80 border border-gray-200/60 rounded-2xl text-xs text-gray-600 shadow-sm backdrop-blur-md"><div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider"><Sparkles size={10}/> {t('reasoning')}<span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">{t('confidence')}: {confidence}%</span></div><div className="leading-relaxed whitespace-pre-line">{msg.reasoning_trace}</div></div>}
         </div>
       </div>
     );
