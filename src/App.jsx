@@ -29,7 +29,8 @@ import {
   XCircle,
   ListPlus,
   Save,
-  Globe
+  Globe,
+  Info
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -159,7 +160,11 @@ const TRANSLATIONS = {
     hcmTitle: "Human Capital Lab",
     signOut: "Sign Out",
     accessDenied: "Access Denied: ID not found in allowlist.",
-    changeLanguage: "Language:"
+    changeLanguage: "Language:",
+    tempTooltip: "Controls randomness: lower is precise, higher is creative.",
+    topPTooltip: "Restricts token selection to top probability mass.",
+    latencyTooltip: "Time delay between request and response.",
+    leaveChat: "Leave the Chat"
   },
   de: {
     enterLab: "Labor betreten",
@@ -201,7 +206,11 @@ const TRANSLATIONS = {
     hcmTitle: "Human Capital Lab",
     signOut: "Abmelden",
     accessDenied: "Zugriff verweigert: ID nicht gefunden.",
-    changeLanguage: "Sprache:"
+    changeLanguage: "Sprache:",
+    tempTooltip: "Steuert Zufälligkeit: niedriger ist präzise, höher ist kreativ.",
+    topPTooltip: "Beschränkt Token-Auswahl auf höchste Wahrscheinlichkeit.",
+    latencyTooltip: "Zeitverzögerung bis zur Antwort.",
+    leaveChat: "Chat verlassen"
   },
   it: {
     enterLab: "Entra nel Laboratorio",
@@ -243,7 +252,11 @@ const TRANSLATIONS = {
     hcmTitle: "Human Capital Lab",
     signOut: "Disconnettersi",
     accessDenied: "Accesso Negato: ID non trovato.",
-    changeLanguage: "Lingua:"
+    changeLanguage: "Lingua:",
+    tempTooltip: "Controlla la casualità: basso è preciso, alto è creativo.",
+    topPTooltip: "Limita la selezione dei token alla probabilità più alta.",
+    latencyTooltip: "Tempo di risposta del modello.",
+    leaveChat: "Lascia la chat"
   }
 };
 
@@ -343,8 +356,20 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
 };
 
 // -----------------------------------------------------------------------------
-// 4. DUMMY LOG GENERATOR (For High Complexity)
+// 4. UI COMPONENTS
 // -----------------------------------------------------------------------------
+
+// APPLE-STYLE TOOLTIP
+const Tooltip = ({ text, children }) => (
+  <div className="relative group flex items-center w-fit cursor-help">
+    {children}
+    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:block w-max max-w-[220px] bg-gray-800/90 backdrop-blur-md text-white text-[11px] px-3 py-2 rounded-xl shadow-xl z-50 pointer-events-none animate-in fade-in slide-in-from-bottom-1 font-normal tracking-wide">
+      {text}
+      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-800/90"></div>
+    </div>
+  </div>
+);
+
 const LogTerminal = () => {
   const [logs, setLogs] = useState(["System initialized..."]);
   const messages = [
@@ -777,6 +802,7 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-[#F5F5F7] flex flex-col font-sans text-gray-900 selection:bg-blue-100">
+      <LanguageSwitcher />
       {isResearcherMode && <div className="bg-gray-900 text-white/90 py-2 px-6 text-[10px] font-medium flex justify-between items-center backdrop-blur-md sticky top-0 z-50 shadow-sm tracking-wide"><span className="flex items-center gap-2"><Terminal size={12}/> {CONDITIONS[condition].name} — {studentId}</span><div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${isMaintenanceMode?"bg-red-500 animate-pulse":"bg-emerald-500"}`}></span>{isMaintenanceMode?"MAINTENANCE":"LIVE"}</div></div>}
       
       <div className={`flex-1 ${isHighComplexity ? 'flex flex-col lg:grid lg:grid-cols-12 gap-6 p-6 max-w-[1600px] mx-auto w-full' : 'flex justify-center p-6'} lg:overflow-hidden`}>
@@ -785,7 +811,7 @@ function AppContent() {
         {isHighComplexity && (
           <div className="order-1 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/60 rounded-[2rem] shadow-sm p-8 space-y-8 h-auto lg:h-[calc(100vh-80px)] animate-in slide-in-from-left-4 duration-500">
              <h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> {t('configuration')}</h2>
-             <div className="space-y-6"><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('temperature')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('topP')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div></div>
+             <div className="space-y-6"><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><Tooltip text={t('tempTooltip')}><span>{t('temperature')}</span></Tooltip><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><Tooltip text={t('topPTooltip')}><span>{t('topP')}</span></Tooltip><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div></div>
           </div>
         )}
 
@@ -795,7 +821,7 @@ function AppContent() {
               <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-200"></div><span className="text-xs font-bold tracking-wider uppercase text-gray-500">{t('hcmTitle')}</span></div>
               <div className="flex items-center gap-4">
                  <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100"><div className="w-5 h-5 rounded-full bg-gradient-to-br from-gray-700 to-black flex items-center justify-center text-[9px] text-white font-bold shadow-sm">{studentId.charAt(0)}</div><span className="text-xs font-medium text-gray-600 tracking-wide">{studentId}</span></div>
-                 <button onClick={handleLogout} className="text-gray-400 hover:text-red-500 transition-colors"><LogOut size={18}/></button>
+                 <Tooltip text={t('leaveChat')}><button onClick={handleLogout} className="text-gray-400 hover:text-red-500 transition-colors"><LogOut size={18}/></button></Tooltip>
               </div>
            </div>
            
@@ -807,7 +833,7 @@ function AppContent() {
            </div>
 
            <div className="flex-1 overflow-y-auto p-6 pb-6 scroll-smooth">
-              {chatHistory.length===0 && <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards"><div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner"><Users size={40} strokeWidth={1} className="text-gray-300"/></div><p className="text-sm font-medium text-gray-400 tracking-wide">{t('readyForAnalysis')}</p></div>}
+              {chatHistory.length===0 && <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards"><div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner"><Bot size={40} strokeWidth={1} className="text-gray-300"/></div><p className="text-sm font-medium text-gray-400 tracking-wide">{t('readyForAnalysis')}</p></div>}
               {chatHistory.map((m,i) => <MessageRenderer key={i} msg={m}/>)}
               {loading && <div className="flex gap-2 p-4 items-center text-xs text-gray-400 font-medium animate-pulse"><div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-200"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-400"></div> {t('analyzingData')}</div>}
               <div ref={bottomRef}/>
@@ -832,7 +858,7 @@ function AppContent() {
              <div className="space-y-6 relative z-10">
                 <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-sm"><div className="text-gray-500 mb-2 tracking-wider">{t('status')}</div><div className={`text-xs font-bold flex items-center gap-2 ${loading?'text-yellow-400':'text-emerald-400'}`}><span className={`w-2 h-2 rounded-full ${loading?'bg-yellow-400 animate-pulse':'bg-emerald-400'}`}></span>{loading?t('processing'):t('operational')}</div></div>
                 <div className="space-y-3"><div className="flex justify-between text-xs"><span className="tracking-wider">{t('tokenStream')}</span><span className="text-blue-400 font-bold">42/s</span></div><div className="w-full bg-black/40 h-24 rounded-xl border border-white/5 flex items-end p-2 gap-[2px] overflow-hidden">{Array.from({length:24}).map((_,i)=><div key={i} className="flex-1 bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-[1px]" style={{height: `${20+Math.random()*80}%`, opacity: 0.4+Math.random()*0.6}}></div>)}</div></div>
-                <div className="space-y-3 pt-6 border-t border-white/10"><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Zap size={12} className="text-yellow-500"/> {t('latency')}</span><span className="text-white font-mono">24ms</span></div><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Cpu size={12} className="text-purple-500"/> {t('uptime')}</span><span className="text-white font-mono">99.9%</span></div></div>
+                <div className="space-y-3 pt-6 border-t border-white/10"><div className="flex justify-between items-center py-1"><Tooltip text={t('latencyTooltip')}><span className="flex items-center gap-2"><Zap size={12} className="text-yellow-500"/> {t('latency')}</span></Tooltip><span className="text-white font-mono">24ms</span></div><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Cpu size={12} className="text-purple-500"/> {t('uptime')}</span><span className="text-white font-mono">99.9%</span></div></div>
                 <LogTerminal />
              </div>
              <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-[80px] pointer-events-none"></div>
