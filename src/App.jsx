@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom'; // Added for Portal Tooltips
 import { 
   Send, 
   Settings, 
@@ -248,8 +249,7 @@ const TRANSLATIONS = {
     reasoning: "Ragionamento",
     confidence: "Confidenza",
     signInTitle: "Accedi al Human Capital Lab",
-    hcmTitle: "Laboratorio Dati HCM"
-    ,
+    hcmTitle: "Laboratorio Dati HCM",
     signOut: "Disconnettersi",
     accessDenied: "Accesso Negato: ID non trovato.",
     changeLanguage: "Lingua:",
@@ -301,7 +301,6 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
   const instruction = `Respond in ${langMap[lang] || "English"}.`;
   
-  // REVISED GUARDRAIL: IMMEDIATE SHUTDOWN
   const systemPrompt = `
     You are a specialized Human Capital Management (HCM) & HR Analytics assistant. ${instruction}
     
@@ -359,16 +358,42 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
 // 4. UI COMPONENTS
 // -----------------------------------------------------------------------------
 
-// APPLE-STYLE TOOLTIP
-const Tooltip = ({ text, children }) => (
-  <div className="relative group flex items-center w-fit cursor-help">
-    {children}
-    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:block w-max max-w-[220px] bg-gray-800/90 backdrop-blur-md text-white text-[11px] px-3 py-2 rounded-xl shadow-xl z-50 pointer-events-none animate-in fade-in slide-in-from-bottom-1 font-normal tracking-wide">
-      {text}
-      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-800/90"></div>
-    </div>
-  </div>
-);
+// PORTAL TOOLTIP (Fixes Overflow Issues)
+const Tooltip = ({ text, children }) => {
+  const [show, setShow] = useState(false);
+  const [coords, setCoords] = useState({ top: 0, left: 0 });
+  const triggerRef = useRef(null);
+
+  const handleEnter = () => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setCoords({
+        top: rect.top - 10, // Position above
+        left: rect.left + rect.width / 2
+      });
+      setShow(true);
+    }
+  };
+
+  return (
+    <>
+      <div ref={triggerRef} onMouseEnter={handleEnter} onMouseLeave={() => setShow(false)} className="cursor-help">
+        {children}
+      </div>
+      {show && createPortal(
+        <div 
+          className="fixed z-[9999] px-3 py-2 text-[11px] text-white bg-gray-900/90 backdrop-blur-md rounded-xl shadow-2xl pointer-events-none transform -translate-x-1/2 -translate-y-full animate-in fade-in zoom-in-95 duration-200 font-sans tracking-wide"
+          style={{ top: coords.top, left: coords.left }}
+        >
+          {text}
+          {/* Arrow */}
+          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900/90"></div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+};
 
 const LogTerminal = () => {
   const [logs, setLogs] = useState(["System initialized..."]);
