@@ -29,8 +29,7 @@ import {
   XCircle,
   ListPlus,
   Save,
-  Globe,
-  Info
+  Globe
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -249,7 +248,8 @@ const TRANSLATIONS = {
     reasoning: "Ragionamento",
     confidence: "Confidenza",
     signInTitle: "Accedi al Human Capital Lab",
-    hcmTitle: "Human Capital Lab",
+    hcmTitle: "Laboratorio Dati HCM"
+    ,
     signOut: "Disconnettersi",
     accessDenied: "Accesso Negato: ID non trovato.",
     changeLanguage: "Lingua:",
@@ -705,7 +705,7 @@ function AppContent() {
   };
 
   // --- FLOATING LANGUAGE TOGGLE (LOGIN SCREEN) ---
-  const FloatingLangToggle = () => {
+  const LanguageSwitcher = () => {
     const flags = { en: "🇬🇧", de: "🇨🇭", it: "🇮🇹" };
     const next = lang === 'en' ? 'de' : lang === 'de' ? 'it' : 'en';
     return (
@@ -741,7 +741,7 @@ function AppContent() {
 
   if (!isLoggedIn) return (
     <div className="min-h-screen bg-[#F5F5F7] flex items-center justify-center p-4 font-sans text-gray-900 selection:bg-blue-100/50">
-      <FloatingLangToggle />
+      <LanguageSwitcher />
       <div className="bg-white/80 backdrop-blur-2xl p-10 rounded-[2.5rem] shadow-2xl w-full max-w-[24rem] border border-white/60 animate-in fade-in zoom-in duration-500">
         <div className="text-center mb-10">
           <div className="w-16 h-16 bg-gradient-to-br from-gray-900 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-black/10 text-white"><Users size={32} strokeWidth={1.5}/></div>
@@ -802,7 +802,6 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-[#F5F5F7] flex flex-col font-sans text-gray-900 selection:bg-blue-100">
-      <LanguageSwitcher />
       {isResearcherMode && <div className="bg-gray-900 text-white/90 py-2 px-6 text-[10px] font-medium flex justify-between items-center backdrop-blur-md sticky top-0 z-50 shadow-sm tracking-wide"><span className="flex items-center gap-2"><Terminal size={12}/> {CONDITIONS[condition].name} — {studentId}</span><div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${isMaintenanceMode?"bg-red-500 animate-pulse":"bg-emerald-500"}`}></span>{isMaintenanceMode?"MAINTENANCE":"LIVE"}</div></div>}
       
       <div className={`flex-1 ${isHighComplexity ? 'flex flex-col lg:grid lg:grid-cols-12 gap-6 p-6 max-w-[1600px] mx-auto w-full' : 'flex justify-center p-6'} lg:overflow-hidden`}>
@@ -833,7 +832,7 @@ function AppContent() {
            </div>
 
            <div className="flex-1 overflow-y-auto p-6 pb-6 scroll-smooth">
-              {chatHistory.length===0 && <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards"><div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner"><Bot size={40} strokeWidth={1} className="text-gray-300"/></div><p className="text-sm font-medium text-gray-400 tracking-wide">{t('readyForAnalysis')}</p></div>}
+              {chatHistory.length===0 && <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-0 animate-in fade-in duration-1000 fill-mode-forwards"><div className="w-24 h-24 bg-gray-50 rounded-[2rem] flex items-center justify-center mb-2 shadow-inner"><Users size={40} strokeWidth={1} className="text-gray-300"/></div><p className="text-sm font-medium text-gray-400 tracking-wide">{t('readyForAnalysis')}</p></div>}
               {chatHistory.map((m,i) => <MessageRenderer key={i} msg={m}/>)}
               {loading && <div className="flex gap-2 p-4 items-center text-xs text-gray-400 font-medium animate-pulse"><div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-200"></div><div className="w-1.5 h-1.5 bg-gray-400 rounded-full animation-delay-400"></div> {t('analyzingData')}</div>}
               <div ref={bottomRef}/>
