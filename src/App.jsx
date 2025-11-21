@@ -48,7 +48,8 @@ import {
   query,
   onSnapshot,
   setDoc,
-  writeBatch
+  writeBatch,
+  arrayUnion
 } from "firebase/firestore";
 
 // -----------------------------------------------------------------------------
@@ -165,7 +166,12 @@ const TRANSLATIONS = {
     tempTooltip: "Controls randomness: lower is precise, higher is creative.",
     topPTooltip: "Restricts token selection to top probability mass.",
     latencyTooltip: "Time delay between request and response.",
-    leaveChat: "Leave the Chat"
+    leaveChat: "Leave the Chat",
+    confirmTitle: "Confirm ID",
+    confirmText: "You are about to sign in as",
+    confirmWarning: "Ensure this is your exact participant ID.",
+    cancel: "Cancel",
+    confirm: "Confirm"
   },
   de: {
     enterLab: "Labor betreten",
@@ -211,7 +217,12 @@ const TRANSLATIONS = {
     tempTooltip: "Steuert Zufälligkeit: niedriger ist präzise, höher ist kreativ.",
     topPTooltip: "Beschränkt Token-Auswahl auf höchste Wahrscheinlichkeit.",
     latencyTooltip: "Zeitverzögerung bis zur Antwort.",
-    leaveChat: "Chat verlassen"
+    leaveChat: "Chat verlassen",
+    confirmTitle: "ID Bestätigen",
+    confirmText: "Sie melden sich an als",
+    confirmWarning: "Stellen Sie sicher, dass dies Ihre exakte Teilnehmer-ID ist.",
+    cancel: "Abbrechen",
+    confirm: "Bestätigen"
   },
   it: {
     enterLab: "Entra nel Laboratorio",
@@ -257,7 +268,12 @@ const TRANSLATIONS = {
     tempTooltip: "Controlla la casualità: basso è preciso, alto è creativo.",
     topPTooltip: "Limita la selezione dei token alla probabilità più alta.",
     latencyTooltip: "Tempo di risposta del modello.",
-    leaveChat: "Lascia la chat"
+    leaveChat: "Lascia la chat",
+    confirmTitle: "Conferma ID",
+    confirmText: "Stai per accedere come",
+    confirmWarning: "Assicurati che questo sia il tuo ID partecipante esatto.",
+    cancel: "Annulla",
+    confirm: "Conferma"
   }
 };
 
@@ -297,15 +313,20 @@ const getConditionFromId = (studentId) => {
 // -----------------------------------------------------------------------------
 // 3. API WRAPPER
 // -----------------------------------------------------------------------------
-const callLLM = async (query, contextFilename, conditionId, params, lang) => {
+const callLLM = async (query, contextFilename, conditionId, params, lang, chatHistory) => {
   const config = LLM_CONFIG.providers[LLM_CONFIG.activeProvider];
   const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
   const instruction = `Respond in ${langMap[lang] || "English"}.`;
   
   // Determine transparency level for the prompt
-  // Conditions 1 (Alex) and 2 (Danny) are High Transparency -> Need Logic Separation
   const isTransparent = conditionId <= 2;
   
+  // CONTEXT MANAGEMENT: Only send last 2 messages to save tokens
+  const recentHistory = chatHistory.slice(-2).map(msg => ({
+     role: msg.type === 'user' ? 'user' : 'assistant',
+     content: msg.text || msg.answer // Handle both user text and AI answer fields
+  }));
+
   const systemPrompt = `
     You are a specialized Human Capital Management (HCM) & HR Analytics assistant. ${instruction}
     
@@ -338,6 +359,7 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
         model: config.model,
         messages: [
           { role: 'system', content: systemPrompt },
+          ...recentHistory, // Inject history here
           { role: 'user', content: query }
         ],
         temperature: params.temperature,
@@ -352,32 +374,22 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
     let answer = content;
     let reasoning = null;
 
-    // PARSE RESPONSE FOR TRANSPARENCY
     if (isTransparent) {
       if (content.includes("[REASONING]") && content.includes("[ANSWER]")) {
         const parts = content.split("[ANSWER]");
         reasoning = parts[0].replace("[REASONING]", "").trim();
         answer = parts[1].trim();
       } else {
-        // Fallback if model fails to format
         reasoning = "Analysis based on provided HR metrics and general principles.";
       }
     }
 
-    // FAKE VECTOR DATA GENERATOR (For High Complexity Visuals)
     const vectorData = {
        "shard_id": `hcm-vec-${Math.floor(Math.random() * 99)}`,
        "embedding_dim": 4096,
-       "attention_heads": {
-          "h1": (Math.random()).toFixed(4),
-          "h2": (Math.random()).toFixed(4),
-          "h_ref": (Math.random()).toFixed(4)
-       },
+       "attention_heads": { "h1": (Math.random()).toFixed(4), "h2": (Math.random()).toFixed(4) },
        "token_logprobs": Array.from({length: 5}, () => -(Math.random()).toFixed(3)),
-       "latency_breakdown": {
-          "tokenization": `${Math.floor(Math.random() * 10)}ms`,
-          "inference": `${Math.floor(Math.random() * 300) + 100}ms`
-       },
+       "latency_breakdown": { "tokenization": `${Math.floor(Math.random() * 10)}ms`, "inference": `${Math.floor(Math.random() * 300) + 100}ms` },
        "stop_reason": "eos_token"
     };
 
@@ -480,7 +492,8 @@ function AppContent() {
   const [authError, setAuthError] = useState(null);
   const [exportDataText, setExportDataText] = useState(null); 
   const [showIdManager, setShowIdManager] = useState(false);
-  const [bulkIds, setBulkIds] = useState(""); 
+  const [bulkIds, setBulkIds] = useState("");
+  const [showConfirmModal, setShowConfirmModal] = useState(false); 
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -522,10 +535,13 @@ function AppContent() {
     if (savedId) setStudentId(savedId);
   }, []);
 
-  // --- SESSION LOGIC ---
+  // --- SESSION & CHAT RESTORE ---
   useEffect(() => {
     if (!isLoggedIn || !db || !isAuthReady) return;
+    
     const now = Date.now();
+
+    // 1. START NEW ANALYTICS SESSION
     const startSession = async () => {
       try {
         const ref = await addDoc(collection(db, "sessions"), {
@@ -540,6 +556,18 @@ function AppContent() {
       } catch(e) { console.error(e); }
     };
     startSession();
+
+    // 2. LOAD PERSISTENT CHAT HISTORY
+    const loadChatHistory = async () => {
+       try {
+          const userDoc = await getDoc(doc(db, "user_data", studentId));
+          if (userDoc.exists() && userDoc.data().chat_history) {
+             setChatHistory(userDoc.data().chat_history);
+          }
+       } catch(e) { console.warn("No history found or load error", e); }
+    };
+    loadChatHistory();
+
   }, [isLoggedIn, isAuthReady]);
 
   const sessionIdRef = useRef(sessionId);
@@ -599,7 +627,7 @@ function AppContent() {
   };
 
   // --- ACCESS CONTROL HANDLER (CHECK DB) ---
-  const handleLogin = async (e) => {
+  const handleLogin = (e) => {
     e.preventDefault();
     setLoginError(""); 
     const cleanedId = studentId.trim();
@@ -608,7 +636,13 @@ function AppContent() {
       setLoginError(t('formatHint'));
       return;
     }
+    
+    // SHOW CONFIRMATION MODAL INSTEAD OF LOGGING IN
+    setShowConfirmModal(true);
+  };
 
+  const finalizeLogin = async () => {
+    const cleanedId = studentId.trim();
     try {
       const idRef = doc(db, "allowed_users", cleanedId);
       const idSnap = await getDoc(idRef);
@@ -619,6 +653,7 @@ function AppContent() {
         setIsLoggedIn(true);
       } else {
         setLoginError(t('accessDenied'));
+        setShowConfirmModal(false);
       }
     } catch (err) {
       console.warn("Verification skipped (DB error). Logging in...", err);
@@ -632,26 +667,48 @@ function AppContent() {
     setIsLoggedIn(false);
     setSessionId(null);
     setChatHistory([]);
+    setShowConfirmModal(false);
   };
 
   const handleSend = async () => {
     if (!query.trim()) return;
     const userMsg = { type: 'user', text: query };
-    setChatHistory(prev => [...prev, userMsg]);
+    
+    // Update UI Immediately
+    const newHistory = [...chatHistory, userMsg];
+    setChatHistory(newHistory);
     setLoading(true);
     logInteraction("PROMPT_SENT", { query });
     setQuery("");
     
-    const start = Date.now();
-    const res = await callLLM(userMsg.text, currentFile?.name, condition, params, lang);
-    const latency = Date.now() - start;
+    // SAVE USER MSG TO PERSISTENT HISTORY
+    if (db) {
+       const userRef = doc(db, "user_data", studentId);
+       // Create doc if not exists, then append
+       setDoc(userRef, { chat_history: arrayUnion(userMsg) }, { merge: true });
+    }
 
-    setChatHistory(prev => [...prev, { 
+    const start = Date.now();
+    // Pass the NEW history (with user msg) to the LLM wrapper
+    const res = await callLLM(userMsg.text, currentFile?.name, condition, params, lang, newHistory);
+    const latency = Date.now() - start;
+    
+    const aiMsg = { 
       type: 'ai', ...res, 
       system_metrics: { latency_ms: latency, tokens_used: 150, model_version: "Llama-4", context_window_usage: "N/A" }
-    }]);
+    };
+
+    // Update UI with AI Msg
+    const finalHistory = [...newHistory, aiMsg];
+    setChatHistory(finalHistory);
     setLastResponseTimestamp(Date.now());
     setLoading(false);
+
+    // SAVE AI MSG TO PERSISTENT HISTORY
+    if (db) {
+       const userRef = doc(db, "user_data", studentId);
+       updateDoc(userRef, { chat_history: arrayUnion(aiMsg) });
+    }
   };
 
   const validateAndSetFile = (file) => {
@@ -760,7 +817,7 @@ function AppContent() {
         <div className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-500 flex-shrink-0 shadow-sm"><Brain size={18}/></div>
         <div className="space-y-2 min-w-0 flex-1">
            <div className="bg-[#E9E9EB] text-gray-900 px-5 py-3 rounded-[1.3rem] rounded-tl-none text-[15px] leading-relaxed shadow-sm inline-block whitespace-pre-line">{msg.answer}</div>
-           {isHighTransparency && msg.reasoning_trace && <div className="ml-1 mt-2 p-4 bg-white/80 border border-gray-200/60 rounded-2xl text-xs text-gray-600 shadow-sm backdrop-blur-md"><div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider"><Sparkles size={10}/> {t('reasoning')}<span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">{t('confidence')}: {confidence}%</span></div><div className="leading-relaxed whitespace-pre-line">{msg.reasoning_trace}</div></div>}
+           {isHighTransparency && <div className="ml-1 mt-2 p-4 bg-white/80 border border-gray-200/60 rounded-2xl text-xs text-gray-600 shadow-sm backdrop-blur-md"><div className="flex items-center gap-2 font-semibold mb-2 text-gray-400 text-[10px] uppercase tracking-wider"><Sparkles size={10}/> {t('reasoning')}<span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full border border-emerald-100 text-[9px] ml-auto">{t('confidence')}: {confidence}%</span></div><div className="leading-relaxed whitespace-pre-line">{msg.reasoning_trace}</div></div>}
         </div>
       </div>
     );
@@ -857,6 +914,25 @@ function AppContent() {
                <button onClick={handleBatchUpload} className="bg-green-600 text-white px-4 py-3 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-green-700"><Save size={16}/> Save IDs to Database</button>
              </div>
            </div>
+        )}
+        {showConfirmModal && (
+          <div className="fixed inset-0 bg-black/30 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-in fade-in">
+            <div className="bg-white/90 backdrop-blur-xl rounded-[2rem] p-6 w-full max-w-sm shadow-2xl text-center border border-white/40 transform transition-all scale-100">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">{t('confirmTitle')}</h3>
+              <p className="text-gray-500 text-sm mb-4">{t('confirmText')} <span className="font-bold text-gray-900">{studentId}</span></p>
+              <div className="bg-yellow-50 text-yellow-700 text-xs p-3 rounded-xl mb-6 border border-yellow-100">
+                {t('confirmWarning')}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setShowConfirmModal(false)} className="py-3 rounded-xl text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors">
+                  {t('cancel')}
+                </button>
+                <button onClick={finalizeLogin} className="py-3 rounded-xl text-sm font-medium text-white bg-[#007AFF] hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20">
+                  {t('confirm')}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>
