@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { createPortal } from 'react-dom'; // Added for Portal Tooltips
+import { createPortal } from 'react-dom';
 import { 
   Send, 
   Settings, 
@@ -30,7 +30,8 @@ import {
   XCircle,
   ListPlus,
   Save,
-  Globe
+  Globe,
+  Code2 // Added for Vector Context
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -152,7 +153,7 @@ const TRANSLATIONS = {
     systemMetrics: "System Metrics",
     analysis: "Analysis",
     summary: "Summary",
-    rawData: "Raw Data",
+    rawData: "Vector Context", // RENAMED to sound technical
     logicFlow: "Logic Flow",
     reasoning: "Reasoning",
     confidence: "Confidence",
@@ -198,7 +199,7 @@ const TRANSLATIONS = {
     systemMetrics: "Systemmetriken",
     analysis: "Analyse",
     summary: "Zusammenfassung",
-    rawData: "Rohdaten",
+    rawData: "Vektor-Kontext", // RENAMED
     logicFlow: "Logikfluss",
     reasoning: "Begründung",
     confidence: "Konfidenz",
@@ -244,7 +245,7 @@ const TRANSLATIONS = {
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
     summary: "Riepilogo",
-    rawData: "Dati Grezzi",
+    rawData: "Contesto Vettoriale", // RENAMED
     logicFlow: "Flusso Logico",
     reasoning: "Ragionamento",
     confidence: "Confidenza",
@@ -338,18 +339,37 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
     if (!response.ok) throw new Error(`API Error`);
     const data = await response.json();
     const confidence = data.confidence_score || (0.85 + (Math.random() * 0.1));
+    
+    // --- FAKE TECHNICAL DATA GENERATOR ---
+    // This creates convincing looking "Vector" data to increase cognitive load
+    const vectorData = {
+       "shard_id": `hcm-vec-${Math.floor(Math.random() * 99)}`,
+       "embedding_dim": 4096,
+       "attention_heads": {
+          "h1": (Math.random()).toFixed(4),
+          "h2": (Math.random()).toFixed(4),
+          "h_ref": (Math.random()).toFixed(4)
+       },
+       "token_logprobs": Array.from({length: 5}, () => -(Math.random()).toFixed(3)),
+       "latency_breakdown": {
+          "tokenization": `${Math.floor(Math.random() * 10)}ms`,
+          "inference": `${Math.floor(Math.random() * 300) + 100}ms`
+       },
+       "stop_reason": "eos_token"
+    };
+
     return {
       answer: data.choices?.[0]?.message?.content || "No response.",
       reasoning_trace: conditionId <= 2 ? "Reasoning included." : null, 
       confidence_score: confidence, 
-      raw_data_snippet: { note: "Live Data" }
+      raw_data_snippet: vectorData // Updated payload
     };
   } catch (error) {
     return {
       answer: "Connection error.",
       reasoning_trace: `Debug: ${error.message}`,
       confidence_score: 0,
-      raw_data_snippet: {}
+      raw_data_snippet: { error: "vector_fetch_failed" }
     };
   }
 };
@@ -712,7 +732,7 @@ function AppContent() {
                 {isHighTransparency && <div className="mt-6 pt-4 border-t border-gray-100"><h4 className="text-[10px] font-bold text-gray-400 mb-3 uppercase tracking-wider flex items-center gap-2"><Terminal size={10}/> {t('logicFlow')}</h4><div className="font-mono text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100 leading-relaxed">{msg.reasoning_trace}</div></div>}
               </div>
             )}
-            {tab==='raw' && <pre className="text-xs bg-gray-50 p-4 rounded-xl border border-gray-100 overflow-auto text-gray-600 font-mono">{JSON.stringify(msg.raw_data_snippet,null,2)}</pre>}
+            {tab==='raw' && <pre className="text-xs bg-gray-900 p-5 rounded-xl border border-gray-800 overflow-auto text-green-400 font-mono shadow-inner">{JSON.stringify(msg.raw_data_snippet,null,2)}</pre>}
           </div>
         </div>
       );
