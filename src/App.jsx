@@ -3,7 +3,7 @@ import {
   Send, 
   Settings, 
   Activity, 
-  Users, // Changed from Database
+  Users,
   Brain, 
   Terminal,
   User,
@@ -26,7 +26,9 @@ import {
   FileText,
   AlertCircle,
   Copy,
-  XCircle
+  XCircle,
+  ListPlus,
+  Save
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -39,46 +41,12 @@ import {
   doc, 
   serverTimestamp,
   getDocs,
+  getDoc,
   query,
   onSnapshot,
-  setDoc
+  setDoc,
+  writeBatch
 } from "firebase/firestore";
-
-// -----------------------------------------------------------------------------
-// 0. ERROR BOUNDARY
-// -----------------------------------------------------------------------------
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen bg-red-50 flex items-center justify-center p-6">
-          <div className="bg-white p-8 rounded-xl shadow-xl max-w-lg border border-red-200">
-            <h1 className="text-xl font-bold text-red-600 mb-4 flex items-center gap-2">
-              <AlertCircle/> Application Crash
-            </h1>
-            <p className="text-gray-600 mb-4">The application encountered a critical error.</p>
-            <pre className="bg-gray-100 p-4 rounded text-xs font-mono overflow-auto mb-4 text-red-800">
-              {this.state.error ? this.state.error.toString() : "Unknown Error"}
-            </pre>
-            <button onClick={() => window.location.reload()} className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700">
-              Reload Page
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children; 
-  }
-}
 
 // -----------------------------------------------------------------------------
 // 1. CONFIGURATION & CONSTANTS
@@ -140,8 +108,9 @@ const TRANSLATIONS = {
     researcherMode: "Researcher Mode",
     locked: "Locked",
     unlocked: "Unlocked",
-    csvExport: "Generate Data View",
+    csvExport: "Export CSV",
     jsonExport: "Raw JSON",
+    manageIds: "Manage Access",
     systemMetrics: "System Metrics",
     analysis: "Analysis",
     summary: "Summary",
@@ -151,7 +120,8 @@ const TRANSLATIONS = {
     confidence: "Confidence",
     signInTitle: "Sign in to Human Capital Lab",
     hcmTitle: "Human Capital Lab",
-    signOut: "Sign Out"
+    signOut: "Sign Out",
+    accessDenied: "Access Denied: ID not found in allowlist."
   },
   de: {
     enterLab: "Labor betreten",
@@ -179,8 +149,9 @@ const TRANSLATIONS = {
     researcherMode: "Forschermodus",
     locked: "Gesperrt",
     unlocked: "Entsperrt",
-    csvExport: "Datenansicht generieren",
+    csvExport: "CSV Export",
     jsonExport: "Roh-JSON",
+    manageIds: "Zugriff verwalten",
     systemMetrics: "Systemmetriken",
     analysis: "Analyse",
     summary: "Zusammenfassung",
@@ -190,7 +161,8 @@ const TRANSLATIONS = {
     confidence: "Konfidenz",
     signInTitle: "Anmelden im Human Capital Lab",
     hcmTitle: "Human Capital Lab",
-    signOut: "Abmelden"
+    signOut: "Abmelden",
+    accessDenied: "Zugriff verweigert: ID nicht gefunden."
   },
   it: {
     enterLab: "Entra nel Laboratorio",
@@ -218,8 +190,9 @@ const TRANSLATIONS = {
     researcherMode: "Modalità Ricercatore",
     locked: "Bloccato",
     unlocked: "Sbloccato",
-    csvExport: "Genera Vista Dati",
+    csvExport: "Esporta CSV",
     jsonExport: "JSON Grezzo",
+    manageIds: "Gestisci Accesso",
     systemMetrics: "Metriche di Sistema",
     analysis: "Analisi",
     summary: "Riepilogo",
@@ -229,7 +202,8 @@ const TRANSLATIONS = {
     confidence: "Confidenza",
     signInTitle: "Accedi al Human Capital Lab",
     hcmTitle: "Human Capital Lab",
-    signOut: "Disconnettersi"
+    signOut: "Disconnettersi",
+    accessDenied: "Accesso Negato: ID non trovato."
   }
 };
 
@@ -274,7 +248,6 @@ const callLLM = async (query, contextFilename, conditionId, params, lang) => {
   const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
   const instruction = `Respond in ${langMap[lang] || "English"}.`;
   
-  // REVISED GUARDRAIL: IMMEDIATE SHUTDOWN
   const systemPrompt = `
     You are a specialized Human Capital Management (HCM) & HR Analytics assistant. ${instruction}
     
@@ -345,7 +318,7 @@ const LogTerminal = () => {
       setLogs(prev => {
         const newLog = messages[Math.floor(Math.random() * messages.length)];
         const updated = [...prev, `[${new Date().toLocaleTimeString()}] ${newLog}`];
-        return updated.slice(-8); // Keep last 8
+        return updated.slice(-8); 
       });
     }, 1500);
     return () => clearInterval(interval);
@@ -374,6 +347,8 @@ function AppContent() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [exportDataText, setExportDataText] = useState(null); 
+  const [showIdManager, setShowIdManager] = useState(false); // New State for ID Manager
+  const [bulkIds, setBulkIds] = useState(""); // For pasting IDs
   
   const [params, setParams] = useState({ temperature: 0.7, topP: 0.9, contextWindow: 4096 });
   const [currentFile, setCurrentFile] = useState(null);
@@ -491,15 +466,36 @@ function AppContent() {
     }
   };
 
-  const handleLogin = (e) => {
+  // --- ACCESS CONTROL HANDLER (CHECK DB) ---
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (!ID_REGEX.test(studentId.trim())) {
+    setLoginError(""); 
+    const cleanedId = studentId.trim();
+    
+    if (!ID_REGEX.test(cleanedId)) {
       setLoginError(t('formatHint'));
       return;
     }
-    localStorage.setItem("hcm_student_id", studentId.trim());
-    setCondition(getConditionFromId(studentId.trim()));
-    setIsLoggedIn(true);
+
+    // CHECK ALLOWLIST IN FIRESTORE
+    try {
+      const idRef = doc(db, "allowed_users", cleanedId);
+      const idSnap = await getDoc(idRef);
+      
+      if (idSnap.exists()) {
+        // Access Granted
+        localStorage.setItem("hcm_student_id", cleanedId);
+        setCondition(getConditionFromId(cleanedId));
+        setIsLoggedIn(true);
+      } else {
+        // Access Denied
+        setLoginError(t('accessDenied'));
+      }
+    } catch (err) {
+      // Fallback for testing or if DB read fails (assume allow for now or deny? Safe is deny)
+      console.error("Check ID failed", err);
+      setLoginError("Verification Error. Try again.");
+    }
   };
 
   const handleLogout = () => {
@@ -528,23 +524,12 @@ function AppContent() {
     setLoading(false);
   };
 
-  const validateAndSetFile = (file) => {
-    const ext = file.name.split('.').pop().toLowerCase();
-    if (!ALLOWED_EXTENSIONS.includes(ext)) {
-       alert("File Type not Supported. Allowed: PDF, DOCX, PPTX, XLSX, CSV"); 
-       return;
-    }
-    if (file.size > 500 * 1024) { 
-      alert("File exceeds limit. Only one file with up to two pages is permitted.");
-      return;
-    }
-    setCurrentFile(file);
-    logInteraction("FILE_UPLOAD", { name: file.name, size: file.size });
-  };
-
   const handleFileSelect = (e) => {
     const f = e.target.files[0];
-    if (f) validateAndSetFile(f);
+    if (!f) return;
+    if (f.size > 500 * 1024) return alert("Max 500KB");
+    setCurrentFile(f);
+    logInteraction("FILE_UPLOAD", { name: f.name });
   };
 
   const handleDrop = (e) => {
@@ -554,7 +539,7 @@ function AppContent() {
         alert("Only one file is permitted.");
         return;
       }
-      validateAndSetFile(e.dataTransfer.files[0]);
+      handleFileSelect({ target: { files: e.dataTransfer.files } }); // Reuse logic
       e.dataTransfer.clearData();
     }
   };
@@ -567,6 +552,30 @@ function AppContent() {
 
   const toggleMaintenance = async () => {
      if(db) await setDoc(doc(db, "settings", "config"), { maintenance_mode: !isMaintenanceMode }, { merge: true });
+  };
+
+  // --- BATCH ID UPLOAD ---
+  const handleBatchUpload = async () => {
+    if (!db || !bulkIds.trim()) return;
+    const ids = bulkIds.split(/[\n, ]+/).map(s => s.trim()).filter(s => ID_REGEX.test(s));
+    
+    if (ids.length === 0) return alert("No valid IDs found.");
+    if (!confirm(`Upload ${ids.length} IDs to allowlist?`)) return;
+
+    const batch = writeBatch(db);
+    ids.forEach(id => {
+      const ref = doc(db, "allowed_users", id);
+      batch.set(ref, { active: true, added: Date.now() });
+    });
+    
+    try {
+      await batch.commit();
+      alert("Success! IDs added.");
+      setBulkIds("");
+      setShowIdManager(false);
+    } catch (e) {
+      alert("Batch upload failed: " + e.message);
+    }
   };
 
   // --- RENDERERS ---
@@ -641,7 +650,7 @@ function AppContent() {
         <div className="text-center mb-10">
           <div className="w-16 h-16 bg-gradient-to-br from-gray-900 to-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-black/10 text-white"><Users size={32} strokeWidth={1.5}/></div>
           <h1 className="text-2xl font-semibold tracking-tight text-gray-900">{t('hcmTitle')}</h1>
-          <p className="text-sm text-gray-400 mt-2 font-medium tracking-wide">{t('signInTitle')}</p>
+          <p className="text-sm text-gray-400 mt-2 font-medium">{t('signInTitle')}</p>
         </div>
         <form onSubmit={handleLogin} className="space-y-6">
           <div className="space-y-2">
@@ -657,9 +666,12 @@ function AppContent() {
           <div className="pt-8 border-t border-gray-100 flex flex-col gap-4">
              <label className="flex items-center justify-center gap-2 text-xs text-gray-400 cursor-pointer hover:text-gray-600 transition-colors"><input type="checkbox" checked={isResearcherMode} onChange={handleResearcherToggle} className="accent-black"/>{t('researcherMode')}</label>
              {isResearcherMode && (
-               <div className="grid grid-cols-2 gap-2 animate-in fade-in slide-in-from-top-2">
-                 <button type="button" onClick={toggleMaintenance} className="text-[10px] py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-200 transition-colors">{isMaintenanceMode?<Lock size={10}/>:<Unlock size={10}/>}{isMaintenanceMode?t('locked'):t('unlocked')}</button>
-                 <button type="button" onClick={generateDataView} className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-blue-100 transition-colors"><FileText size={10}/>{t('csvExport')}</button>
+               <div className="flex flex-col gap-2 animate-in fade-in slide-in-from-top-2">
+                 <div className="grid grid-cols-2 gap-2">
+                    <button type="button" onClick={toggleMaintenance} className="text-[10px] py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-200 transition-colors">{isMaintenanceMode?<Lock size={10}/>:<Unlock size={10}/>}{isMaintenanceMode?t('locked'):t('unlocked')}</button>
+                    <button type="button" onClick={generateDataView} className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-blue-100 transition-colors"><FileText size={10}/>{t('csvExport')}</button>
+                 </div>
+                 <button type="button" onClick={() => setShowIdManager(true)} className="w-full text-[10px] bg-gray-900 text-white py-2 rounded-xl font-medium flex items-center justify-center gap-1.5 hover:bg-black transition-colors"><ListPlus size={10}/> {t('manageIds')}</button>
                </div>
              )}
           </div>
@@ -678,6 +690,16 @@ function AppContent() {
             </div>
           </div>
         )}
+        {showIdManager && (
+           <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-8 animate-in fade-in">
+             <div className="bg-white w-full max-w-md rounded-[2rem] p-8 flex flex-col shadow-2xl ring-1 ring-black/5">
+               <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">Manage Access List</h3><button onClick={()=>setShowIdManager(false)}><XCircle className="text-gray-400 hover:text-red-500"/></button></div>
+               <p className="text-xs text-gray-500 mb-2">Paste valid IDs (A123456) separated by commas or new lines.</p>
+               <textarea value={bulkIds} onChange={e=>setBulkIds(e.target.value)} className="flex-1 w-full font-mono text-xs bg-gray-50 p-4 rounded-xl border border-gray-200 focus:outline-none resize-none mb-4 h-48" placeholder="A123456, D987654..."/>
+               <button onClick={handleBatchUpload} className="bg-green-600 text-white px-4 py-3 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-green-700"><Save size={16}/> Save IDs to Database</button>
+             </div>
+           </div>
+        )}
       </div>
     </div>
   );
@@ -693,7 +715,7 @@ function AppContent() {
         {isHighComplexity && (
           <div className="order-2 lg:order-1 lg:col-span-3 bg-white/80 backdrop-blur-xl border border-white/60 rounded-[2rem] shadow-sm p-8 space-y-8 h-auto lg:h-[calc(100vh-80px)] animate-in slide-in-from-left-4 duration-500">
              <h2 className="font-semibold text-gray-900 flex items-center gap-2 text-sm"><Settings size={16} className="text-gray-400"/> {t('configuration')}</h2>
-             <div className="space-y-6"><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('temperature')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('topP')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div></div>
+             <div className="space-y-6"><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('temperature')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.temperature}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.temperature} onChange={e=>setParams({...params, temperature: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div><div className="space-y-3"><div className="flex justify-between text-xs font-medium text-gray-500"><span>{t('topP')}</span><span className="text-gray-900 font-mono bg-gray-100 px-2 py-0.5 rounded">{params.topP}</span></div><input type="range" className="w-full accent-gray-900 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer hover:bg-gray-300 transition-colors" value={params.topP} onChange={e=>setParams({...params, topP: parseFloat(e.target.value)})} min="0" max="1" step="0.1"/></div></div>
           </div>
         )}
 
@@ -741,7 +763,6 @@ function AppContent() {
                 <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-sm"><div className="text-gray-500 mb-2 tracking-wider">{t('status')}</div><div className={`text-xs font-bold flex items-center gap-2 ${loading?'text-yellow-400':'text-emerald-400'}`}><span className={`w-2 h-2 rounded-full ${loading?'bg-yellow-400 animate-pulse':'bg-emerald-400'}`}></span>{loading?t('processing'):t('operational')}</div></div>
                 <div className="space-y-3"><div className="flex justify-between text-xs"><span className="tracking-wider">{t('tokenStream')}</span><span className="text-blue-400 font-bold">42/s</span></div><div className="w-full bg-black/40 h-24 rounded-xl border border-white/5 flex items-end p-2 gap-[2px] overflow-hidden">{Array.from({length:24}).map((_,i)=><div key={i} className="flex-1 bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-[1px]" style={{height: `${20+Math.random()*80}%`, opacity: 0.4+Math.random()*0.6}}></div>)}</div></div>
                 <div className="space-y-3 pt-6 border-t border-white/10"><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Zap size={12} className="text-yellow-500"/> {t('latency')}</span><span className="text-white font-mono">24ms</span></div><div className="flex justify-between items-center py-1"><span className="flex items-center gap-2"><Cpu size={12} className="text-purple-500"/> {t('uptime')}</span><span className="text-white font-mono">99.9%</span></div></div>
-                {/* ADDED FAKE TERMINAL LOG */}
                 <LogTerminal />
              </div>
              <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-[80px] pointer-events-none"></div>
