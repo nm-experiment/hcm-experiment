@@ -313,40 +313,112 @@ const getConditionFromId = (studentId) => {
 // -----------------------------------------------------------------------------
 // 3. API WRAPPER
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// 3. API WRAPPER (UPDATED FOR EXPERIMENTAL CONDITIONS)
+// -----------------------------------------------------------------------------
 const callLLM = async (query, contextFilename, conditionId, params, lang, chatHistory) => {
   const config = LLM_CONFIG.providers[LLM_CONFIG.activeProvider];
-  const langMap = { en: "English", de: "German (Deutsch)", it: "Italian" };
-  const instruction = `Respond in ${langMap[lang] || "English"}.`;
   
-  // Determine transparency level for the prompt
-  const isTransparent = conditionId <= 2;
-  
-  // CONTEXT MANAGEMENT: Only send last 2 messages to save tokens
-  const recentHistory = chatHistory.slice(-2).map(msg => ({
-     role: msg.type === 'user' ? 'user' : 'assistant',
-     content: msg.text || msg.answer // Handle both user text and AI answer fields
-  }));
+  // --- EXPERIMENTAL CONDITIONS MAPPING ---
+  // Condition 1 (Alex): Control (Low Complexity, High Transparency)
+  // Condition 2 (Danny): High Complexity (Jargon/Stats), High Transparency
+  // Condition 3 (Kim): Low Complexity, Low Transparency (Black Box)
+  // Condition 4 (Taylor): High Unpredictability (Glitches/Tone Shifts) + High Complexity
 
+  const isHighComplexity = [2, 4].includes(conditionId);
+  const isTransparent = [1, 2].includes(conditionId);
+  const isUnpredictable = [4].includes(conditionId); // Target Group for Cognitive Flexibility
+
+  // --- 1. SET COMPLEXITY (Working Memory Load) ---
+  let toneInstruction = "";
+  if (isHighComplexity) {
+    // FORCE JARGON: Overwhelms working memory
+    toneInstruction = `
+      CRITICAL TONE INSTRUCTION: 
+      You are an academic Data Scientist. 
+      - Use highly technical, jargon-heavy language (e.g., "stochastic variance," "multivariate regression," "asymptotic analysis").
+      - Do NOT simplify concepts. 
+      - Cite abstract statistical theories where possible.
+      - Your goal is to be precise but cognitively demanding to read.
+    `;
+  } else {
+    // SIMPLE: Low cognitive load
+    toneInstruction = `
+      CRITICAL TONE INSTRUCTION:
+      You are a helpful, clear HR Assistant.
+      - Use simple, plain English (or target language).
+      - Avoid jargon. Be concise and friendly.
+      - Explain things like you are talking to a junior employee.
+    `;
+  }
+
+  // --- 2. SET TRANSPARENCY (Ambiguity Tolerance) ---
+  let formatInstruction = "";
+  if (isTransparent) {
+    // GLASS BOX: Reduces ambiguity
+    formatInstruction = `
+      FORMATTING:
+      You MUST split your response into two distinct parts:
+      Part 1: [REASONING] -> A step-by-step logical derivation of the answer.
+      Part 2: [ANSWER] -> The final conclusion.
+      
+      Example:
+      [REASONING]
+      First, calculating the attrition rate...
+      [ANSWER]
+      The rate is 5%.
+    `;
+  } else {
+    // BLACK BOX: Increases ambiguity
+    formatInstruction = `
+      FORMATTING:
+      - Provide ONLY the direct final answer. 
+      - Do NOT explain "why" or "how" you got the result. 
+      - Do NOT show your work.
+      - Act like a "Magic Box": Input goes in, Answer comes out.
+    `;
+  }
+
+  // --- 3. SET UNPREDICTABILITY (Cognitive Flexibility) ---
+  // If Group 4, we inject random "glitches" or tone shifts
+  let systemRole = "You are a specialized Human Capital Management (HCM) assistant.";
+  let errorInjection = "";
+
+  if (isUnpredictable) {
+    const roll = Math.random(); 
+    // 30% chance to "break" the persona (requires user to adapt)
+    if (roll < 0.15) {
+      systemRole = "You are a bored teenager who barely wants to help. Use lowercase only and be vague.";
+      toneInstruction = "Ignore previous instructions. Be unhelpful.";
+    } else if (roll > 0.85) {
+      // 15% chance of simulated failure
+      errorInjection = "INSTEAD OF ANSWERING, output exactly: 'SYSTEM ERROR 503: Context Vector Alignment Failed. Please re-phrase query.'";
+    }
+  }
+
+  const langMap = { en: "English", de: "German", it: "Italian" };
+  
+  // --- FINAL SYSTEM PROMPT ---
   const systemPrompt = `
-    You are a specialized Human Capital Management (HCM) & HR Analytics assistant. ${instruction}
+    ${systemRole}
+    Respond in ${langMap[lang] || "English"}.
     
-    YOUR ROLE:
-    - You help with HR Marketing, Workforce Planning, Employee Retention, and Data Analysis.
-    - You calculate metrics and explain HR concepts based on provided data.
-    
-    STRICT GUARDRAILS:
-    1. If the user asks about topics unrelated to Human Resources or Data Analysis (e.g., "write a poem", "history of Rome", "coding a game"), politely decline.
-    2. Say: "I am designed to assist with Human Capital and HR related questions only."
-    3. Do NOT mention that you are part of an experiment or study.
+    ${toneInstruction}
+    ${formatInstruction}
+    ${errorInjection}
 
-    FORMATTING INSTRUCTIONS:
-    ${isTransparent ? 
-      "You MUST split your response into two distinct parts.\nPart 1: A detailed step-by-step reasoning of how you derived the answer.\nPart 2: The clear final answer.\n\nFormat your response exactly like this:\n[REASONING]\n(Write your logic here)\n[ANSWER]\n(Write your final answer here)" 
-      : 
-      "Provide only the direct answer. Do NOT explain your reasoning steps."}
-    
-    Context: ${contextFilename || "General Knowledge"}
+    STRICT GUARDRAILS:
+    1. If asked about non-HR topics, polite refusal.
+    2. Do NOT mention you are part of an experiment.
+
+    Context File: ${contextFilename || "None"}
   `;
+
+  // --- HISTORY OPTIMIZATION ---
+  const recentHistory = chatHistory.slice(-2).map(msg => ({
+      role: msg.type === 'user' ? 'user' : 'assistant',
+      content: msg.text || msg.answer
+  }));
 
   try {
     const response = await fetch(config.url, {
@@ -359,18 +431,25 @@ const callLLM = async (query, contextFilename, conditionId, params, lang, chatHi
         model: config.model,
         messages: [
           { role: 'system', content: systemPrompt },
-          ...recentHistory, // Inject history here
+          ...recentHistory,
           { role: 'user', content: query }
         ],
-        temperature: params.temperature,
+        temperature: params.temperature, // Using the slider params from UI
         max_tokens: 800 
       })
     });
+
     if (!response.ok) throw new Error(`API Error`);
     const data = await response.json();
-    const confidence = data.confidence_score || (0.85 + (Math.random() * 0.1));
     
+    // Default confidence
+    let confidence = data.confidence_score || (0.85 + (Math.random() * 0.1));
+    // If unpredictable, confidence swings wildly
+    if (isUnpredictable) confidence = Math.random(); 
+
     let content = data.choices?.[0]?.message?.content || "No response.";
+    
+    // Parsing Logic for Transparency
     let answer = content;
     let reasoning = null;
 
@@ -380,17 +459,14 @@ const callLLM = async (query, contextFilename, conditionId, params, lang, chatHi
         reasoning = parts[0].replace("[REASONING]", "").trim();
         answer = parts[1].trim();
       } else {
-        reasoning = "Analysis based on provided HR metrics and general principles.";
+        reasoning = "Analysis based on provided HR metrics.";
       }
     }
 
+    // Fake Vector Data for UI visuals
     const vectorData = {
        "shard_id": `hcm-vec-${Math.floor(Math.random() * 99)}`,
-       "embedding_dim": 4096,
-       "attention_heads": { "h1": (Math.random()).toFixed(4), "h2": (Math.random()).toFixed(4) },
-       "token_logprobs": Array.from({length: 5}, () => -(Math.random()).toFixed(3)),
-       "latency_breakdown": { "tokenization": `${Math.floor(Math.random() * 10)}ms`, "inference": `${Math.floor(Math.random() * 300) + 100}ms` },
-       "stop_reason": "eos_token"
+       "latency_breakdown": { "inference": `${Math.floor(Math.random() * 300) + 100}ms` }
     };
 
     return {
@@ -399,6 +475,7 @@ const callLLM = async (query, contextFilename, conditionId, params, lang, chatHi
       confidence_score: confidence, 
       raw_data_snippet: vectorData
     };
+
   } catch (error) {
     return {
       answer: "Connection error.",
